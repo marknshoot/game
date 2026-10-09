@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>RELAY 3D</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b111c'/%3E%3Cpath d='M8 22h16M8 22V10M16 22V6M24 22V10' stroke='%23ffd257' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body class="lobbybody">
+<div class="wrap">
+  <h1>RELAY <span class="tag">3D · LAN</span></h1>
+  <p class="lead">
+    Three players. One <b>blind Runner</b> who can only see thirteen metres of shape.
+    One <b>mute Operator</b> who owns every lever and cannot see the Runner at all.
+    One <b>deaf Bridge</b> who is the only voice on the team and hears nothing.
+  </p>
+  <p class="muted">
+    A 3D parkour relay across a gantry: a retractable span, a floor that is a lie, a lift only
+    the Operator can move, and an exit that needs two keys from two different laptops.
+  </p>
+
+  <div class="join">
+    <label>ROOM <input id="room" value="A" maxlength="8" size="4" /></label>
+    <label>NAME <input id="name" size="10" placeholder="optional" /></label>
+  </div>
+
+  <div class="roles">
+    <a class="rolecard runner" data-role="runner" href="#">
+      <h3>RUNNER <span class="badge blind">BLIND</span></h3>
+      <p>WASD + mouse, SPACE to jump. Thirteen metres of fog, no labels, no timers, no map.
+         You will run off things that are not there.</p>
+      <p class="muted">Your voice reaches the Operator. Nobody else can hear you.</p>
+    </a>
+    <a class="rolecard operator" data-role="operator" href="#">
+      <h3>OPERATOR <span class="badge mute">MUTE</span></h3>
+      <p>The whole board: span, lift, exit, hazard marks, timings. Every lever.
+         No feed of the Runner — not even a dot.</p>
+      <p class="muted">Stamps and KNOCKs are your voice. Lever timing is your handwriting.</p>
+    </a>
+    <a class="rolecard bridge" data-role="bridge" href="#">
+      <h3>BRIDGE <span class="badge deaf">DEAF</span></h3>
+      <p>You see his cam and the Operator's board, you are the only one who can speak,
+         you hold the second key and six chalk marks. You hear nothing at all.</p>
+      <p class="muted">Fuse two lossy pictures into words that arrive before he commits.</p>
+    </a>
+  </div>
+
+  <h2>Play it on three laptops</h2>
+  <ol>
+    <li>On one laptop (any of the three): <code>cd game &amp;&amp; node server.js</code>.</li>
+    <li>It prints a LAN address, e.g. <code>http://192.168.1.24:8791/</code>. Open that address on all three laptops.</li>
+    <li>Use the same <b>room code</b>, pick a different role on each laptop. Each role can only be held by one machine.</li>
+    <li>Keep the windows visible (browsers throttle hidden ones).</li>
+  </ol>
+  <p class="muted">
+    If a role is missing the game still runs — you just have to do without them.
+    Two players in a room is a legitimate (and much harder) way to play.
+  </p>
+
+  <h2>The one number the game is built on</h2>
+  <pre class="callout">bridge speaks → 0.25 s reaction → 0.7 s mechanism  ≈  1 second
+at 6.6 m/s that is 6.6 metres of runway the Bridge has to spend before the world moves.</pre>
+  <p class="muted">
+    So the Bridge's job is not to describe the world, it is to <b>schedule</b> it.
+    Measured windows for this level (from the headless harness, not from vibes):
+    span throw <code>z ∈ [4, 15]</code>, phantom-floor jump <code>z ∈ [41, 44.5]</code>,
+    call window <code>d ∈ [1.5, 5] m</code> before the hole.
+  </p>
+
+  <h2>Controls</h2>
+  <table>
+    <tr><th>Screen</th><th>Keys</th><th>Mouse</th></tr>
+    <tr><td>Runner</td><td>WASD move · SPACE jump · arrows turn · P autopilot · ⏎ shout (reaches the Operator only)</td><td>click to look</td></tr>
+    <tr><td>Operator</td><td>B span · F lift · E exit lever · N knock · 7/8/9 stamp</td><td>click the board to drop a stamp</td></tr>
+    <tr><td>Bridge</td><td>1-6 GO/WAIT/JUMP NOW/STOP/LEFT/RIGHT · T THROW · O ON ONE · K hold the 2nd key · C cycle chalk · V chalk ahead</td><td>click his cam to place chalk</td></tr>
+  </table>
+
+  <p class="muted">
+    Design doc: <a href="../docs/design-pitch.md">docs/design-pitch.md</a> ·
+    2D prototype of the same idea: <a href="../prototype/index.html">prototype/</a>.
+  </p>
+</div>
+<div id="toast" class="toast"></div>
+<script>
+  const room = document.getElementById('room');
+  const name = document.getElementById('name');
+  room.value = new URLSearchParams(location.search).get('room') || 'A';
+  name.value = new URLSearchParams(location.search).get('name') || '';
+  const go = (role) => {
+    const q = new URLSearchParams({ role, room: room.value.trim() || 'A' });
+    if (name.value.trim()) q.set('name', name.value.trim());
+    location.href = `play.html?${q}`;
+  };
+  for (const card of document.querySelectorAll('.rolecard')) {
+    card.addEventListener('click', (e) => {
+      e.preventDefault();
+      go(card.dataset.role);
+    });
+  }
+  room.addEventListener('keydown', (e) => { if (e.key === 'Enter') go('runner'); });
+</script>
+</body>
+</html>

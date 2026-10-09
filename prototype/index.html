@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>RELAY — 3-player parkour co-op (prototype)</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b111c'/%3E%3Cpath d='M8 22h16M8 22V10M16 22V6M24 22V10' stroke='%23ffd257' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="wrap">
+  <h1>RELAY</h1>
+  <p class="lead">
+    A 3-player asymmetric co-op parkour game. One player <b>runs</b> a level they can barely read.
+    One player <b>controls</b> the level but cannot speak and cannot see the runner.
+    One player is the <b>only voice in the building</b> — and cannot hear anything at all.
+  </p>
+  <p class="muted">Playable prototype: one level, three private screens, the whole chain of communication enforced by the game.</p>
+
+  <p>
+    <a class="cta" href="play.html?mode=solo">▶ Play the 1-person demo (all three panels)</a>
+    <a class="cta alt" href="play.html?mode=net&amp;role=runner">Runner</a>
+    <a class="cta alt" href="play.html?mode=net&amp;role=operator">Operator</a>
+    <a class="cta alt" href="play.html?mode=net&amp;role=bridge">Bridge</a>
+  </p>
+
+  <h2>60-second guided demo (solo view)</h2>
+  <div class="callout">
+    <b>1.</b> Open the 1-person demo. Three private panels appear — nobody can see anybody else's.<br />
+    <b>2.</b> In the <b>Runner</b> panel press <code>P</code> (autopilot, a demo helper so one person can drive everything).<br />
+    <b>3.</b> Watch the <b>Bridge</b> panel: <code>GAP (A3) — 5.7 m / 0.86 s ◀ CALL NOW</code>. When it flashes <b>CALL NOW</b>, press <code>T</code> in the Bridge panel ("THROW") and immediately press <code>B</code> in the <b>Operator</b> panel. The slide bridge must be out before the Runner reaches the edge.<br />
+    <b>4.</b> The bridge motor only stays out for 3 seconds and locks after two throws inside 8 seconds, so a mistimed throw is a real mistake.<br />
+    <b>5.</b> At <code>PHANTOM FLOOR (D4)</code>, nothing looks different to the Runner — the floor is a lie. When the countdown hits ~4.5 m, press <code>3</code> ("JUMP NOW") in the Bridge panel and watch the Runner trust you. He falls if you are late.<br />
+    <b>6.</b> At <code>TWO-KEY EXIT (F4)</code>: <code>E</code> in the Operator panel arms it, then <b>hold</b> <code>K</code> in the Bridge panel for 1.5 s. Neither screen can finish the level alone.<br />
+    <b>7.</b> Now try the other two panels with the mouse only, and notice what you <i>cannot</i> do from each one.
+  </div>
+
+  <h2>The whole idea in one beat</h2>
+  <p>
+    There is a gap in the floor. The <b>Runner</b> can see a hole but cannot see whether the slide-bridge is out —
+    and at a full sprint they physically cannot stop once they are within 2.5&nbsp;m of the edge.
+    The <b>Operator</b> has the lever that throws the bridge, but the bridge takes <b>0.7&nbsp;s</b> to slide out,
+    and the Operator <b>cannot see where the Runner is</b>.
+    Only the <b>Bridge</b> sees the run, and only the Bridge can talk.
+  </p>
+  <pre class="callout">span travel 0.7 s  +  operator reaction 0.25 s  =  0.95 s
+runner sprint 6.6 m/s  ->  the Bridge has to speak about 2 seconds early.</pre>
+  <p class="muted">
+    That number is the game. Every level is built so that the information expires: a call that was correct
+    when it was spoken is lethal by the time it lands. The other two beats in the prototype are a
+    <b>phantom floor</b> (visually identical to concrete, a hole in the collision — only the Operator's board shows it)
+    and a <b>two-key exit</b> (the Operator arms it, the Bridge physically holds the second key).
+  </p>
+
+  <h2>Why they can't just talk to each other</h2>
+  <div class="cards">
+    <div class="card blind">
+      <h3>RUNNER — BLIND</h3>
+      <p><b>Has:</b> parkour, reflexes, touch. Speaks out loud.</p>
+      <p><b>Missing:</b> labels, colours, door states, the map. Sees only a few metres of raw shape.</p>
+      <p><b>Hears:</b> the Bridge. Nobody else answers.</p>
+      <p class="muted">Their callouts go to the Operator's ear only — the Operator can hear them and cannot reply.</p>
+    </div>
+    <div class="card mute">
+      <h3>OPERATOR — MUTE</h3>
+      <p><b>Has:</b> the full board — door states, timings, hazards — and every lever.</p>
+      <p><b>Missing:</b> a voice, and any view of the Runner. No live feed of them at all.</p>
+      <p><b>Hears:</b> the Bridge and the Runner.</p>
+      <p class="muted">Their language is stamps, knocks, and the world itself. A door opening <i>is</i> the word "go".</p>
+    </div>
+    <div class="card deaf">
+      <h3>BRIDGE — DEAF</h3>
+      <p><b>Has:</b> the Runner's cam, the Operator's board, the only voice, the chalk, the second key.</p>
+      <p><b>Missing:</b> all audio — no footsteps, no door hiss, no voice from anyone.</p>
+      <p><b>Job:</b> fuse two lossy pictures into instructions that arrive before the commitment point.</p>
+      <p class="muted">Chalk is a limited resource: 6 arrows. The Runner can carry at most what you draw.</p>
+    </div>
+  </div>
+
+  <h2>Controls</h2>
+  <table>
+    <tr><th>Screen</th><th>Keys</th><th>Mouse</th></tr>
+    <tr>
+      <td>Runner</td>
+      <td><code>A</code>/<code>D</code> or arrows to run, <code>SPACE</code> to jump, <code>P</code> autopilot (demo helper)</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td>Operator</td>
+      <td><code>B</code> throw the slide bridge, <code>E</code> exit lever, <code>N</code> knock, <code>7</code>/<code>8</code>/<code>9</code> pick a stamp</td>
+      <td>Click the board to stamp a location at the current grid point</td>
+    </tr>
+    <tr>
+      <td>Bridge</td>
+      <td><code>1</code> GO, <code>2</code> WAIT, <code>3</code> JUMP NOW, <code>4</code> STOP, <code>5</code> LEFT, <code>6</code> RIGHT, <code>T</code> THROW, <code>O</code> ON ONE, <code>K</code> hold the 2nd key, <code>C</code> cycle chalk, <code>V</code> quick chalk</td>
+      <td>Click the Runner's cam to draw a chalk arrow there</td>
+    </tr>
+  </table>
+
+  <h2>Playing with three people</h2>
+  <p>
+    Open the three <b>Runner / Operator / Bridge</b> links above in three windows (or three machines on the same
+    network if you serve the folder). The tabs find each other automatically — the Runner's tab owns the simulation,
+    and everyone else syncs to it. There is nothing to configure.
+  </p>
+  <p class="callout">
+    <b>Important for a real test:</b> play from separate rooms with headphones, or at least agree that only the Bridge may
+    speak and the Operator only uses stamps and the world. Three people crowding one laptop will just talk to each
+    other and the game disappears. The 1-person demo exists so you can see the machinery on your own.
+  </p>
+
+  <h2>What the prototype is honestly testing</h2>
+  <ul>
+    <li>Does a <b>timed</b> relay feel different from a puzzle relay? (Bombanana, Keep Talking) — the plan is only interesting if the plan expires.</li>
+    <li>Is the Bridge busy in a <i>fun</i> way, or just a telephone wire? (Watch whether the Bridge has to choose what to say.)</li>
+    <li>Is the Operator's mute-ness painful and funny, or just annoying? (Watch for emergent language: two-door-flickers = "wait".)</li>
+    <li>Does the Runner feel blind-but-capable, and is the blame funny instead of toxic? (Instant respawn, ghost replay, no per-player death stats.)</li>
+  </ul>
+
+  <h2>Run it</h2>
+  <pre class="callout">cd prototype
+python3 -m http.server 8080
+# then open http://localhost:8080/</pre>
+  <p class="muted">
+    Design doc: <a href="../docs/design-pitch.md">docs/design-pitch.md</a> — the level in this prototype is the
+    worked use case in section 8.
+  </p>
+</div>
+</body>
+</html>

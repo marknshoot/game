@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>RELAY — prototype</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b111c'/%3E%3Cpath d='M8 22h16M8 22V10M16 22V6M24 22V10' stroke='%23ffd257' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="topbar">
+  <a href="index.html">← lobby</a>
+  <span class="name">RELAY — GANTRY-03 prototype</span>
+  <span class="mode" id="modetag">1-person demo</span>
+</div>
+<div id="app"></div>
+<script type="module" src="js/app.js"></script>
+<script>
+  const q = new URLSearchParams(location.search);
+  const tag = document.getElementById('modetag');
+  tag.textContent = q.get('mode') === 'net' ? `live: ${q.get('role') || 'runner'} (tab ${Math.random().toString(36).slice(2,5)})` : '1-person demo (all three panels)';
+</script>
+</body>
+</html>
