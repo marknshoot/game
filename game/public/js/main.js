@@ -19,6 +19,7 @@ const audio = createAudio(ROLE);
 const PHRASES = ['GO', 'WAIT', 'JUMP NOW', 'STOP', 'LEFT', 'RIGHT', 'THROW', 'ON ONE'];
 const PHRASE_KEYS = ['1', '2', '3', '4', '5', '6', 'T', 'O'];
 const CHALK_DIRS = ['forward', 'left', 'right', 'down'];
+const SONAR_CD = 3.5;
 
 const h = (tag, props = {}, ...kids) => {
   const e = document.createElement(tag);
@@ -148,6 +149,10 @@ function bindInput() {
 }
 
 function onKeyDown(code) {
+  if (ROLE === 'runner' && code === 'KeyQ') {
+    fireSonar();
+    return;
+  }
   if (code === 'KeyP') {
     autopilot = !autopilot;
     net.sendEvent({ type: 'auto', on: autopilot });
@@ -184,10 +189,24 @@ function sendPhrase(text) {
   net.sendEvent({ type: 'phrase', text });
   updatePhraseCd();
 }
+function fireSonar() {
+  if (ROLE !== 'runner' || sonarCd > 0 || local.dead || local.won) return;
+  const r = local.runner;
+  world.triggerSonar(r.x, r.y + 0.9, r.z);
+  audio.sonar();
+  sonarCd = SONAR_CD;
+}
 function quickChalk() {
   const r = stateOf().runner;
+  const dx = Math.sin(input.yaw) * 2.6;
   const dz = Math.cos(input.yaw) * 2.6;
-  net.sendEvent({ type: 'chalk', x: Math.max(-3.4, Math.min(3.4, r.x + dz * 0)), y: 0, z: r.z + 2.6, dir: chalkDir });
+  net.sendEvent({
+    type: 'chalk',
+    x: Math.max(-3.4, Math.min(3.4, r.x + dx)),
+    y: 0,
+    z: Math.max(0.5, Math.min(68, r.z + dz)),
+    dir: chalkDir,
+  });
 }
 
 // ------------------------------------------------------------------ HUD build
@@ -216,7 +235,10 @@ function build() {
     const feel = h('div', { class: 'feel' });
     const coach = h('div', { class: 'coach' });
     const banner = h('div', { class: 'banner' });
-    const lock = h('div', { class: 'lock' }, 'click to look around · WASD move · SPACE jump · sound on');
+    const lock = h('div', { class: 'lock' }, 'click to look around · WASD move · SPACE jump · Q sonar · sound on');
+    const vigDeath = h('div', { class: 'vignette vignette-death' });
+    const vigWin = h('div', { class: 'vignette vignette-win' });
+    const sonarEl = h('div', { class: 'sonar ready' }, '[Q] SONAR');
     const shoutInput = h('input', { class: 'shout', placeholder: 'shout (only the Operator hears you)  ⏎' });
     shoutInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && shoutInput.value.trim()) {
@@ -227,6 +249,8 @@ function build() {
       e.stopPropagation();
     });
     camRegion.append(
+      vigDeath,
+      vigWin,
       h('div', { class: 'crosshair' }),
       ear,
       feel,
@@ -234,8 +258,9 @@ function build() {
       lock,
       h('div', { class: 'shoutrow' }, shoutInput),
       coach,
+      sonarEl,
     );
-    hud.runner = { ear, feel, coach, banner, lock, shout: pushVoiceShot, selfShots: h('div', { class: 'selfshots' }) };
+    hud.runner = { ear, feel, coach, banner, lock, sonar: sonarEl, vigDeath, vigWin, shout: pushVoiceShot, selfShots: h('div', { class: 'selfshots' }) };
     camRegion.append(hud.runner.selfShots);
     setTimeout(() => lock.classList.add('fade'), 6000);
   }
@@ -310,7 +335,9 @@ function build() {
       ),
     );
     earSide.classList.add('stampfeed');
-    camRegion.append(h('div', { class: 'boardlabel' }, "RUNNER'S CAM — what he sees, fogged to ~13 m"), earSide);
+    const vigDeath = h('div', { class: 'vignette vignette-death' });
+    const vigWin = h('div', { class: 'vignette vignette-win' });
+    camRegion.append(vigDeath, vigWin, h('div', { class: 'boardlabel' }, "RUNNER'S CAM — what he sees, fogged to ~13 m"), earSide);
     boardRegion.append(h('div', { class: 'boardlabel' }, "OPERATOR'S BOARD — state and hazards"), beat, coach);
     const side = h(
       'aside',
@@ -329,7 +356,7 @@ function build() {
       h('label', { class: 'auto' }, h('input', { type: 'checkbox', onchange: (e) => net.sendEvent({ type: 'auto', on: e.target.checked }) }), ' autopilot (demo)'),
     );
     app.append(side);
-    hud.bridge = { beat, earSide, coach, ink, keyBar, keyBtn, phraseRow, chalkRow, side, feedEl: side.querySelector('.feed') };
+    hud.bridge = { beat, earSide, coach, ink, keyBar, keyBtn, phraseRow, chalkRow, side, vigDeath, vigWin, feedEl: side.querySelector('.feed') };
   }
 
   canvas.addEventListener('click', onCanvasClick, true);
@@ -465,6 +492,7 @@ let sendAcc = 0;
 let domAcc = 0;
 let showRunner = { x: 0, y: 0, z: 2, yaw: 0, vx: 0, vy: 0, vz: 0 };
 let stepAcc = 0.33;
+let sonarCd = 0;
 let shake = 0;
 let lastPhraseT = null;
 let lastKnockT = null;
@@ -477,6 +505,7 @@ function frame(now) {
 
   const s = stateOf();
   world.resize();
+  sonarCd = Math.max(0, sonarCd - dt);
 
   // one-shot edges: new phrase -> speech; new knock -> audio + camera shake.
   // The Bridge is deaf, so it only gets the visual shake on the Runner's cam.
@@ -551,7 +580,7 @@ function frame(now) {
   }
 
   const view = { runner: showRunner, pitch: ROLE === 'runner' ? pitch : 0, ghost: clientGhost, shake };
-  world.update(s, view);
+  world.update(s, view, dt);
   audio.update(s, view, dt);
   if (shake > 0) shake = Math.max(0, shake - Math.min(dt, 0.05));
 
@@ -584,7 +613,7 @@ function updateDom(s) {
   const phraseRecent = ph && s.t - ph.t < 2.5;
 
   if (ROLE === 'runner' && hud.runner) {
-    const { ear, feel, coach, banner } = hud.runner;
+    const { ear, feel, coach, banner, sonar: sonarEl, vigDeath, vigWin } = hud.runner;
     ear.textContent = phraseRecent ? ph.text : '';
     ear.classList.toggle('hot', !!phraseRecent);
     const r = s.runner;
@@ -596,6 +625,11 @@ function updateDom(s) {
     coach.textContent = coachRunner(s);
     banner.textContent = s.won ? 'CLEAR ' + s.wonTime.toFixed(2) + 's' : s.dead ? 'YOU FELL — respawning' : '';
     banner.className = 'banner ' + (s.won ? 'win' : s.dead ? 'die' : '');
+    vigDeath.classList.toggle('on', !!s.dead);
+    vigWin.classList.toggle('on', !!s.won);
+    sonarEl.textContent = sonarCd > 0 ? `[Q] SONAR ${sonarCd.toFixed(1)}s` : '[Q] SONAR';
+    sonarEl.classList.toggle('ready', sonarCd <= 0);
+    sonarEl.classList.toggle('charging', sonarCd > 0);
     hud.runner.lock.style.display = document.pointerLockElement === canvas ? 'none' : '';
   }
 
@@ -612,7 +646,7 @@ function updateDom(s) {
   }
 
   if (ROLE === 'bridge' && hud.bridge) {
-    const { beat, earSide, coach, ink, keyBar, keyBtn, feedEl } = hud.bridge;
+    const { beat, earSide, coach, ink, keyBar, keyBtn, feedEl, vigDeath, vigWin } = hud.bridge;
     const b = nextBeat(s);
     const now = b && b.call && b.kind !== 'exit' && b.kind !== 'lift';
     beat.innerHTML = b
@@ -626,6 +660,8 @@ function updateDom(s) {
           .join('   ')
       : 'no stamps yet';
     coach.textContent = coachBridge(s);
+    vigDeath.classList.toggle('on', !!s.dead);
+    vigWin.classList.toggle('on', !!s.won);
     ink.textContent = String(s.ink);
     keyBar.style.width = Math.min(100, (s.key.hold / SIM.TUNING.keyHoldTime) * 100) + '%';
     keyBtn.classList.toggle('ready', s.exit.armed && s.exit.open < 0.9);
@@ -660,6 +696,10 @@ window.__relay3d = {
   },
   get shake() {
     return shake;
+  },
+  sonar: () => fireSonar(),
+  get sonarCooldown() {
+    return sonarCd;
   },
   THREE,
   LAYER,

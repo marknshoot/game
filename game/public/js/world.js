@@ -8,7 +8,7 @@
 // Operator's board shows, by construction rather than by convention.
 import * as THREE from '../vendor/three.module.js';
 import { LEVEL } from '../../shared/level3d.js';
-import { liftTop } from '../../shared/sim3d.js';
+import { TUNING, liftTop } from '../../shared/sim3d.js';
 
 export const LAYER = { WORLD: 0, BOARD: 1, CHALK: 2 };
 
@@ -27,6 +27,55 @@ const COL = {
   accent: 0x5ad1ff,
   chalk: 0xffd257,
 };
+
+// ---------------------------------------------------------------- sonar wave
+// One shared set of uniforms, injected into every "real" surface material. The
+// phantom floor plate uses M.floor, so it lights up exactly like real floor when
+// the wave sweeps it — the deception survives the scan.
+const sonarUniforms = {
+  uSonarCenter: { value: new THREE.Vector3(0, -999, 0) },
+  uSonarRadius: { value: -10.0 },
+  uSonarWidth: { value: 1.8 },
+  uSonarColor: { value: new THREE.Color(0x38bdf8) },
+  uSonarIntensity: { value: 0.0 },
+};
+
+function attachSonar(mat) {
+  mat.defines = { ...(mat.defines || {}), USE_UV: '' };
+  mat.customProgramCacheKey = () => 'relay-sonar';
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uSonarCenter = sonarUniforms.uSonarCenter;
+    shader.uniforms.uSonarRadius = sonarUniforms.uSonarRadius;
+    shader.uniforms.uSonarWidth = sonarUniforms.uSonarWidth;
+    shader.uniforms.uSonarColor = sonarUniforms.uSonarColor;
+    shader.uniforms.uSonarIntensity = sonarUniforms.uSonarIntensity;
+    shader.vertexShader = 'varying vec3 vWorldPos;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\n\tvWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;',
+    );
+    shader.fragmentShader =
+      'uniform vec3 uSonarCenter;\nuniform float uSonarRadius;\nuniform float uSonarWidth;\nuniform vec3 uSonarColor;\nuniform float uSonarIntensity;\nvarying vec3 vWorldPos;\n' +
+      shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+	{
+		float d = distance( vWorldPos, uSonarCenter );
+		float w = smoothstep( uSonarWidth, 0.0, abs( d - uSonarRadius ) );
+		gl_FragColor.rgb += uSonarColor * w * uSonarIntensity;
+	}`,
+      );
+  };
+  return mat;
+}
+
+// shared one-shot resources: chalk marks and the death ghost trail are rebuilt
+// whenever their count changes, so their geometry/material must not be per-mark
+const CHALK_MAT = new THREE.MeshBasicMaterial({ color: COL.chalk, fog: false, transparent: true, opacity: 0.95 });
+const CHALK_CONE_GEO = new THREE.ConeGeometry(0.34, 0.9, 4);
+const CHALK_BEAM_GEO = new THREE.CylinderGeometry(0.05, 0.05, 2.2, 6);
+const CHALK_RING_GEO = new THREE.RingGeometry(0.4, 0.5, 20);
+const GHOST_MAT = new THREE.MeshBasicMaterial({ color: 0xff6b6b, transparent: true, opacity: 0.5, fog: false });
+const GHOST_GEO = new THREE.SphereGeometry(0.11, 6, 6);
 
 // ------------------------------------------------------------------ textures
 function concreteTexture() {
@@ -148,6 +197,9 @@ export function createWorld(canvas) {
     boardWall: new THREE.MeshBasicMaterial({ color: COL.boardWall, transparent: true, opacity: 0.4, fog: false, side: THREE.DoubleSide }),
     boardRail: new THREE.MeshBasicMaterial({ color: 0x3f6084, transparent: true, opacity: 0.9, fog: false }),
   };
+  // the Runner's sonar glows on the architecture (and on the phantom floor,
+  // which shares M.floor — it must lie identically to the scan)
+  for (const key of ['floor', 'wall', 'catwalk', 'rail', 'metal']) attachSonar(M[key]);
 
   // ------------------------------------------------------------ static world
   for (const b of LEVEL.boxes) {
@@ -185,8 +237,8 @@ export function createWorld(canvas) {
   world.add(decor);
 
   // lights
-  scene.add(new THREE.HemisphereLight(0x4a5f85, 0x0d1219, 1.5));
-  const sun = new THREE.DirectionalLight(0xd8e6ff, 1.5);
+  scene.add(new THREE.HemisphereLight(0x5c7299, 0x161e2a, 1.8));
+  const sun = new THREE.DirectionalLight(0xd8e6ff, 1.8);
   sun.position.set(14, 26, -8);
   sun.target.position.set(0, 0, 30);
   sun.castShadow = true;
@@ -326,16 +378,15 @@ export function createWorld(canvas) {
     chalkMeshes.length = 0;
     for (const k of state.chalk) {
       const g = new THREE.Group();
-      const mat = new THREE.MeshBasicMaterial({ color: COL.chalk, fog: false, transparent: true, opacity: 0.95 });
-      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.34, 0.9, 4), mat);
+      const cone = new THREE.Mesh(CHALK_CONE_GEO, CHALK_MAT);
       cone.position.y = 1.9;
       if (k.dir === 'left') cone.rotation.z = Math.PI / 2;
       else if (k.dir === 'right') cone.rotation.z = -Math.PI / 2;
       else if (k.dir === 'down') cone.rotation.z = Math.PI;
       else cone.rotation.x = -Math.PI / 2;
-      const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.2, 6), mat);
+      const beam = new THREE.Mesh(CHALK_BEAM_GEO, CHALK_MAT);
       beam.position.y = 1.1;
-      const ring = new THREE.Mesh(new THREE.RingGeometry(0.4, 0.5, 20), mat);
+      const ring = new THREE.Mesh(CHALK_RING_GEO, CHALK_MAT);
       ring.rotation.x = -Math.PI / 2;
       ring.position.y = 0.03;
       g.add(cone, beam, ring);
@@ -356,22 +407,81 @@ export function createWorld(canvas) {
     while (ghostG.children.length) ghostG.remove(ghostG.children[0]);
     ghostCount = want;
     if (!alive) {
-      const mat = new THREE.MeshBasicMaterial({ color: 0xff6b6b, transparent: true, opacity: 0.5, fog: false });
       for (let i = 0; i < src.length; i += 4) {
         const g = src[i];
-        const m = new THREE.Mesh(new THREE.SphereGeometry(0.11, 6, 6), mat);
+        const m = new THREE.Mesh(GHOST_GEO, GHOST_MAT);
         m.position.set(g.x, g.y + 0.9, g.z);
         ghostG.add(m);
       }
     }
   }
 
+  // sonar pulse: the Runner's scan, expanding from where he fired it
+  const sonar = { t: 0, active: false, duration: 1.2, maxRadius: 26 };
+  function triggerSonar(x, y, z) {
+    sonar.t = 0;
+    sonar.active = true;
+    sonarUniforms.uSonarCenter.value.set(x, y, z);
+    sonarUniforms.uSonarRadius.value = 0;
+    sonarUniforms.uSonarIntensity.value = 1.2;
+  }
+
+  // game-feel state: head bob, landing dip, speed FOV
+  let bobTimer = 0;
+  let bobAmp = 0;
+  let dip = 0;
+  let dipVel = 0;
+  let airVy = 0;
+  let prevGround = true;
+
   // ------------------------------------------------------------------ update
-  function update(state, view) {
+  function update(state, view, dt = 1 / 60) {
+    const rr = state.runner;
+    const speed = Math.hypot(rr.vx, rr.vz);
+
+    // sonar pulse: expand from 0 to 26 m while the glow fades out
+    if (sonar.active) {
+      sonar.t += dt;
+      const p = Math.min(1, sonar.t / sonar.duration);
+      sonarUniforms.uSonarRadius.value = p * sonar.maxRadius;
+      sonarUniforms.uSonarIntensity.value = 1.2 * (1 - p);
+      if (p >= 1) {
+        sonar.active = false;
+        sonarUniforms.uSonarRadius.value = -10;
+        sonarUniforms.uSonarIntensity.value = 0;
+      }
+    }
+
+    // head bob: subtle vertical + roll while grounded and running, damped to 0
+    const bobTarget = rr.ground && speed > 1.5 && !state.dead ? 1 : 0;
+    bobAmp += (bobTarget - bobAmp) * Math.min(1, dt * 8);
+    if (bobTarget > 0.5) bobTimer += dt * (5.5 + speed * 1.1);
+
+    // landing dip: a spring-damper kick proportional to the impact speed
+    if (!rr.ground && rr.vy < 0) airVy = Math.max(airVy, -rr.vy);
+    if (!prevGround && rr.ground) {
+      dipVel -= Math.min(2.4, 0.2 + airVy * 0.14);
+      airVy = 0;
+    }
+    prevGround = rr.ground;
+    const sdt = Math.min(dt, 0.05);
+    dipVel += (-90 * dip - 13 * dipVel) * sdt;
+    dip = Math.max(-0.15, Math.min(0.05, dip + dipVel * sdt));
+
+    // speed FOV: 75 at rest -> 82 at full run speed
+    const targetFov = 75 + 7 * Math.min(1, speed / TUNING.runSpeed);
+    if (Math.abs(runnerCam.fov - targetFov) > 0.02) {
+      runnerCam.fov += (targetFov - runnerCam.fov) * Math.min(1, dt * 5);
+      runnerCam.updateProjectionMatrix();
+    }
+
     // runner camera
     const r = view.runner;
     runnerCam.position.set(r.x, r.y + 1.55, r.z);
     runnerCam.rotation.set(view.pitch || 0, r.yaw + Math.PI, 0, 'YXZ');
+    runnerCam.position.y += Math.sin(bobTimer) * 0.035 * bobAmp;
+    runnerCam.rotation.z += Math.cos(bobTimer * 0.5) * 0.005 * bobAmp;
+    runnerCam.position.y += dip;
     // knock shake: the Runner feels it, and the Bridge sees the same shake on the
     // Runner's cam (the Bridge is deaf, so the shake is his only knock cue)
     if (view.shake > 0) {
@@ -387,9 +497,9 @@ export function createWorld(canvas) {
     // dynamic world meshes (neutral: shape only, never state)
     const sp = state.span;
     let ext = 0;
-    if (sp.phase === 'moving') ext = 1 - Math.max(0, sp.timer) / 0.7;
+    if (sp.phase === 'moving') ext = 1 - Math.max(0, sp.timer) / TUNING.spanTravel;
     else if (sp.phase === 'extended') ext = 1;
-    else if (sp.phase === 'retracting') ext = Math.max(0, sp.timer) / 0.5;
+    else if (sp.phase === 'retracting') ext = Math.max(0, sp.timer) / TUNING.spanRetract;
     spanMesh.visible = ext > 0.01;
     spanMesh.scale.z = Math.max(0.001, ext);
     spanMesh.position.set(0, LEVEL.span.y + LEVEL.span.h / 2, LEVEL.span.z0 + ((LEVEL.span.z1 - LEVEL.span.z0) * ext) / 2);
@@ -487,5 +597,20 @@ export function createWorld(canvas) {
     return { x: Math.max(-3.6, Math.min(3.6, p.x)), y: 0, z: Math.max(0.5, Math.min(69, p.z)) };
   }
 
-  return { renderer, scene, world, board, runnerCam, operatorCam, update, render, resize, pick, fitOrthoToLevel, liftTopClient: (s) => liftTop(s) };
+  return {
+    renderer,
+    scene,
+    world,
+    board,
+    runnerCam,
+    operatorCam,
+    update,
+    render,
+    resize,
+    pick,
+    fitOrthoToLevel,
+    triggerSonar,
+    sonarUniforms,
+    liftTopClient: (s) => liftTop(s),
+  };
 }

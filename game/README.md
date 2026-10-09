@@ -16,7 +16,7 @@ Each role can only be held by one machine; the server refuses the fourth player.
 
 | | sees | hears | can do |
 |---|---|---|---|
-| **RUNNER** (blind) | first-person, fog kills the world past ~15 m, no labels, no door states, no timers, no map | the Bridge | run, jump, feel things by proximity |
+| **RUNNER** (blind) | first-person, fog kills the world past ~15 m, no labels, no door states, no timers, no map; `Q` sonar pulse reads the architecture out to ~26 m | the Bridge | run, jump, feel things by proximity |
 | **OPERATOR** (mute) | an elevation schematic of the whole gantry: span/lift/exit states, hazard marks, timings — **and no runner, not even a dot** | the Bridge and the Runner | 3 levers, stamps, KNOCK |
 | **BRIDGE** (deaf) | the Runner's cam *and* the Operator's board, side by side | **nothing** | words, 6 chalk marks, the second key |
 
@@ -46,7 +46,7 @@ One gantry, ~64 m, four beats, all of them measured by `test/tune3d.mjs`:
 
 | Screen | Keys | Mouse |
 |---|---|---|
-| Runner | WASD · SPACE jump · arrows turn · `P` autopilot · ⏎ shout (reaches the Operator only) | click to look (pointer lock) |
+| Runner | WASD · SPACE jump · arrows turn · `Q` sonar · `P` autopilot · ⏎ shout (reaches the Operator only) | click to look (pointer lock) |
 | Operator | `B` span · `F` lift · `E` exit lever · `N` knock · `7/8/9` stamp | click the board to drop a stamp |
 | Bridge | `1..6` GO/WAIT/JUMP NOW/STOP/LEFT/RIGHT · `T` THROW · `O` ON ONE · `K` hold the 2nd key · `C` cycle chalk · `V` chalk ahead | click his cam to paint chalk |
 

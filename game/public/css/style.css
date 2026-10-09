@@ -74,6 +74,25 @@ canvas#view { position: absolute; inset: 0; width: 100%; height: 100%; display: 
   padding: 5px 10px; border-radius: 999px; font-family: ui-monospace, monospace;
 }
 .lock.fade { opacity: .25; }
+.vignette { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s; }
+.vignette-death {
+  background: radial-gradient(ellipse at center, rgba(255, 0, 0, 0) 28%, rgba(255, 40, 40, .38) 68%, rgba(140, 0, 0, .78) 100%);
+}
+.vignette-death.on { opacity: 1; animation: vignette-pulse 1.05s ease-in-out infinite; }
+.vignette-win {
+  background: radial-gradient(ellipse at center, rgba(56, 189, 248, .24) 0%, rgba(126, 242, 255, .3) 45%, rgba(255, 210, 87, .55) 100%);
+}
+.vignette-win.on { opacity: 1; animation: vignette-glow 1.4s ease-in-out infinite alternate; }
+@keyframes vignette-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@keyframes vignette-glow { from { opacity: .65; } to { opacity: 1; } }
+.sonar {
+  position: absolute; right: 14px; bottom: 14px; z-index: 4;
+  font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: 1px;
+  color: var(--dim); background: #0b111ccc; border: 1px solid var(--line);
+  border-radius: 999px; padding: 5px 10px; pointer-events: none;
+}
+.sonar.ready { color: var(--accent); border-color: #24506b; box-shadow: 0 0 12px #38bdf833; }
+.sonar.charging { color: #63748f; }
 .shoutrow { position: absolute; left: 50%; bottom: 2.5%; transform: translateX(-50%); width: min(560px, 70%); }
 .shout {
   width: 100%; background: #0b111cd9; border: 1px solid var(--line); color: var(--ink);

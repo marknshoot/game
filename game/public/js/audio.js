@@ -15,6 +15,7 @@ export function createAudio(role) {
       enabled: false,
       unlock: mute,
       update: mute,
+      sonar: mute,
       knock: mute,
       say: mute,
       footstep: mute,
@@ -36,6 +37,7 @@ export function createAudio(role) {
     enabled: true,
     unlock,
     update,
+    sonar,
     knock,
     say,
     footstep,
@@ -337,6 +339,28 @@ export function createAudio(role) {
       o.start(t);
       o.stop(t + 0.1);
       freeOnEnd(o, og);
+    }
+  }
+
+  function sonar() {
+    if (!ctx) return;
+    // a crisp chirp sweeping down, then two quieter echoes tailing off
+    const t0 = ctx.currentTime + 0.01;
+    for (let i = 0; i < 3; i++) {
+      const t = t0 + i * 0.17;
+      const amp = [0.42, 0.2, 0.08][i];
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(1500 + i * 60, t);
+      o.frequency.exponentialRampToValueAtTime(560 - i * 40, t + 0.26);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(amp, t + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      o.connect(g).connect(master);
+      o.start(t);
+      o.stop(t + 0.32);
+      freeOnEnd(o, g);
     }
   }
 
