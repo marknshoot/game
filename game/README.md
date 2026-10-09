@@ -16,9 +16,9 @@ Each role can only be held by one machine; the server refuses the fourth player.
 
 | | sees | hears | can do |
 |---|---|---|---|
-| **RUNNER** (blind) | first-person, fog kills the world past ~15 m, no labels, no door states, no timers, no map; `Q` sonar pulse reads the architecture out to ~26 m | the Bridge | run, jump, feel things by proximity |
-| **OPERATOR** (mute) | an elevation schematic of the whole gantry: span/lift/exit states, hazard marks, timings — **and no runner, not even a dot** | the Bridge and the Runner | 3 levers, stamps, KNOCK |
-| **BRIDGE** (deaf) | the Runner's cam *and* the Operator's board, side by side | **nothing** | words, 6 chalk marks, the second key |
+| **RUNNER** (blind) | first-person, fog kills the world past ~15 m, no labels, no door states, no timers, no map; `Q` sonar pulse reads the architecture out to ~26 m | the Bridge's voice + the gantry's mechanisms | run, jump, feel things by proximity |
+| **OPERATOR** (mute) | an elevation schematic of the whole gantry: span/lift/exit states, hazard marks, timings — **and no runner, not even a dot** | the Bridge, the Runner's shouts, and the gantry | 3 levers, stamps, KNOCK |
+| **BRIDGE** (deaf) | the Runner's cam *and* the Operator's board, side by side | **nothing** — `audio.js` is a hard-muted no-op | words, 6 chalk marks, the second key |
 
 The isolation is structural, not a convention: the Runner's camera and the Operator's board render
 **different layers of the same three.js scene** (`runnerCam.layers` = world+chalk,
@@ -31,7 +31,7 @@ One gantry, ~64 m, four beats, all of them measured by `test/tune3d.mjs`:
 
 1. **z18 — the span.** A slide bridge the Operator throws; 0.7 s of travel, holds 2.6 s, motor
    locks after two throws inside 8 s. Operator throw window `z ∈ [4, 15]` (1.8 s wide).
-   The Runner cannot see whether it is out until he is close, and cannot stop anyway.
+   The Runner cannot see whether it is out without spending a sonar pulse, and cannot stop anyway.
 2. **z44 — the phantom floor.** A floor plate over a hole, drawn with the *same mesh and material*
    as real floor. Only the Operator's board shows `▲`. Runner jump window `z ∈ [41, 44.5]`,
    Bridge call window `d ∈ [1.5, 5] m` — the level's `callLead` is 4.5 m, the middle of it.
@@ -61,6 +61,7 @@ game/
   public/play.html       the client shell (one canvas, up to two viewports)
   public/js/world.js     three.js scene, the two camera rigs, chalk, schematic layers
   public/js/main.js      per-role HUD, input, prediction, coach lines
+  public/js/audio.js     role-gated procedural WebAudio (bridge = hard-muted no-op)
   public/js/net.js       WebSocket client (RTT, snapshots, events)
   public/vendor/three.module.js   three.js r160, vendored (no CDN, no internet needed)
 ```
@@ -70,13 +71,19 @@ game/
   authoritative snapshot (0.22 blend, hard snap above 2.5 m). This is why a player's browser being
   hidden or throttled no longer freezes anyone else — the lesson from the 2D prototype.
 - **Roles are exclusive per room**; a role with no player simply does nothing that level needs.
-- **The Runner's voice** (typed here, spoken in a real build) reaches the Operator only: the
-  Operator is mute, the Bridge is deaf. The server enforces the routing.
+- **The Runner's voice** (typed here, spoken on the Operator's machine via `speechSynthesis`)
+  reaches the Operator only: the Operator is mute, the Bridge is deaf. The server enforces the routing.
+- **Sound is a private channel too.** `audio.js` is procedural WebAudio (no files): filtered-noise
+  footsteps and landings, wooden knocks, a positional span motor (rising whine / steady hum /
+  falling whine) and lift hum, door clunks, and death/win stingers. The Runner hears the gantry and
+  the Bridge; the Operator hears the gantry, the Bridge, and the Runner's shouts; the Bridge's
+  `createAudio` is a hard-muted no-op that never constructs an `AudioContext`. Phrase-wheel words
+  and the Runner's shout are spoken with `speechSynthesis`.
 
 ## Honest limits
 
-No voice chat (LAN players usually have Discord; the phrase wheel replaces the Bridge's voice so
-the rate limit is real). One level. No enemies. The prediction is a light lerp, not a rollback
+No voice chat (LAN players usually have Discord; the phrase wheel is spoken via TTS, so the rate
+limit is real). One level. No enemies. The prediction is a light lerp, not a rollback
 netcode. The Operator's board is an elevation view, so left/right position on the catwalk is not
 readable — deliberate, since they are not supposed to see the Runner anyway. Three.js is r160 (2023)
 because it is vendored; upgrading is a one-file swap.
@@ -85,12 +92,13 @@ because it is vendored; upgrading is a one-file swap.
 
 ```bash
 node ../test/tune3d.mjs     # headless: beat windows, lift, two-key rule, full autopilot run
-node ../test/lan3d.mjs      # three real browser tabs over WebSocket: 20 checks
+node ../test/lan3d.mjs      # three real browser tabs over WebSocket: 23 checks
 ./../test/run.sh            # everything, 2D and 3D
 ```
 
 `test/lan3d.mjs` checks, among other things: WebGL is actually drawing, the layer isolation holds,
 the Operator's lever crosses the network, the Bridge's word reaches both other screens and is
 rate-limited, the Operator's stamp reaches *only* the Bridge, the Runner's shout reaches the
-Operator but never the deaf Bridge, chalk spends shared ink across machines, the two-key exit needs
-both machines, and a full server-side run completes.
+Operator but never the deaf Bridge, the Bridge is hard-muted while the knock renders as a runner-cam
+shake, chalk spends shared ink across machines, the two-key exit needs both machines, and a full
+server-side run completes.

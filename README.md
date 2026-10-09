@@ -21,7 +21,7 @@ that is ~2 seconds of runway. **Comms is read-ahead, not reaction.**
 | [`docs/design-pitch.md`](docs/design-pitch.md) | Full design: role triangle, comms topology, obstacle grammar, risks, and a worked level with **measured** beat windows |
 | [`game/`](game/README.md) | **3D LAN build** — three.js, server-authoritative, played by three laptops on one network. `node game/server.js` |
 | [`prototype/`](prototype/README.md) | **2D prototype** — the same idea in one browser window, three panels, zero setup |
-| [`test/`](test/run.sh) | `./test/run.sh` runs everything: 15 + 14 checks against browser windows, 20 checks over real WebSockets, and two headless tuning harnesses that print the level's beat windows |
+| [`test/`](test/run.sh) | `./test/run.sh` runs everything: 15 + 14 checks against browser windows, 23 checks over real WebSockets, and two headless tuning harnesses that print the level's beat windows |
 | `shots/` | Screenshots of the three private screens, 2D and 3D |
 
 ## Play it
@@ -49,16 +49,32 @@ Verify everything headless:
 ./test/run.sh 3d       # just the 3D LAN game
 ```
 
+## Sound, sonar & feel (3D build)
+
+The asymmetry is enforced in the client, not just the fiction:
+
+- **Procedural audio, role-gated.** [`game/public/js/audio.js`](game/public/js/audio.js)
+  synthesizes every sound with WebAudio — no files, no dependencies: filtered-noise footsteps and
+  landings, wooden knocks, a positional span motor (rising whine, steady hum, falling whine) and
+  lift hum, door clunks, and death/win stingers. The Bridge's `createAudio` is a hard-muted no-op
+  that never constructs an `AudioContext`; the Runner and Operator hear the gantry, and
+  phrase-wheel words and the Runner's shout are spoken with `speechSynthesis`.
+- **Sonar (`Q`).** The blind Runner emits an expanding ring (0 → 26 m over 1.2 s, 3.5 s cooldown)
+  that lights up the architecture — and the phantom floor identically, because it shares the same
+  material. It reads shape, never state.
+- **Camera dynamics.** Head-bobbing while running, a spring-damped landing dip scaled by impact
+  speed, speed FOV (75° at rest → 82° at 6.6 m/s), and death/win vignettes that render on the
+  Runner's screen and on the Bridge's runner-cam feed alike.
+
 ## Status
 
 Two playable builds of the same design: a 2D hot-seat prototype and a 3D LAN game that runs
 across three laptops with a server-authoritative simulation. One level, forced comms, measured
-tuning, 49 automated checks.
+tuning, 52 automated checks.
 
-Honest gaps: no audio, no voice chat (a phrase wheel stands in for speech), one level, no enemies,
-no role rotation, no art beyond flat-shaded industrial. The 3D build's prediction is a light lerp,
-not rollback netcode.
+Honest gaps: no networked voice chat (a phrase wheel and local TTS stand in for speech), one
+level, no enemies, no role rotation, no art beyond flat-shaded industrial. The 3D build's
+prediction is a light lerp, not rollback netcode.
 
 Next up, in order of value: **play it with two friends and count the laughs**, then three more
-levels built from the beat grammar, then role rotation, then audio as a first-class channel
-(the Bridge's deafness only means something once there is something to miss).
+levels built from the beat grammar, then role rotation.
