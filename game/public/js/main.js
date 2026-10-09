@@ -143,7 +143,7 @@ function bindInput() {
   addEventListener('mousemove', (e) => {
     if (ROLE !== 'runner') return;
     if (document.pointerLockElement !== canvas) return;
-    input.yaw += e.movementX * 0.0022;
+    input.yaw -= e.movementX * 0.0022; // mouse right turns the view right (-X)
     pitch = Math.max(-1.0, Math.min(0.9, pitch - e.movementY * 0.0022));
   });
 }

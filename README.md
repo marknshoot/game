@@ -21,7 +21,7 @@ that is ~2 seconds of runway. **Comms is read-ahead, not reaction.**
 | [`docs/design-pitch.md`](docs/design-pitch.md) | Full design: role triangle, comms topology, obstacle grammar, risks, and a worked level with **measured** beat windows |
 | [`game/`](game/README.md) | **3D LAN build** — three.js, server-authoritative, played by three laptops on one network. `node game/server.js` |
 | [`prototype/`](prototype/README.md) | **2D prototype** — the same idea in one browser window, three panels, zero setup |
-| [`test/`](test/run.sh) | `./test/run.sh` runs everything: 15 + 14 checks against browser windows, 23 checks over real WebSockets, and two headless tuning harnesses that print the level's beat windows |
+| [`test/`](test/run.sh) | `./test/run.sh` runs everything: 15 + 14 checks against browser windows, 24 checks over real WebSockets, and two headless tuning harnesses that print the level's beat windows |
 | `shots/` | Screenshots of the three private screens, 2D and 3D |
 
 ## Play it
@@ -70,7 +70,7 @@ The asymmetry is enforced in the client, not just the fiction:
 
 Two playable builds of the same design: a 2D hot-seat prototype and a 3D LAN game that runs
 across three laptops with a server-authoritative simulation. One level, forced comms, measured
-tuning, 52 automated checks.
+tuning, 53 automated checks.
 
 Honest gaps: no networked voice chat (a phrase wheel and local TTS stand in for speech), one
 level, no enemies, no role rotation, no art beyond flat-shaded industrial. The 3D build's

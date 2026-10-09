@@ -92,7 +92,7 @@ because it is vendored; upgrading is a one-file swap.
 
 ```bash
 node ../test/tune3d.mjs     # headless: beat windows, lift, two-key rule, full autopilot run
-node ../test/lan3d.mjs      # three real browser tabs over WebSocket: 23 checks
+node ../test/lan3d.mjs      # three real browser tabs over WebSocket: 24 checks
 ./../test/run.sh            # everything, 2D and 3D
 ```
 

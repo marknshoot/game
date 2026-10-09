@@ -117,6 +117,38 @@ check(
 const peers = await runner.ev('window.__relay3d.peers.map(p=>p.role).sort().join(",")');
 check('all three roles are present in the room', peers === 'bridge,operator,runner', peers);
 
+// --- strafe direction: at yaw 0 the camera looks down +Z, so screen-right is -X.
+//     'D' (s=1) must move the Runner to -X, 'A' (s=-1) back to +X. The Runner tab's
+//     render loop is throttled in headless, so drive the authoritative input directly
+//     and read the result off the Operator's snapshots.
+const serverRunner = () => operator.ev('({ vx: window.__relay3d.state.runner.vx, x: window.__relay3d.state.runner.x })');
+await runner.ev('window.__relay3d.__autoSend = window.__relay3d.net.sendInput; window.__relay3d.net.sendInput = () => {}');
+const drive = (s) => runner.ev(`window.__relay3d.__autoSend({ yaw: 0, f: 0, s: ${s}, jump: false })`);
+let strafeD = { vx: 0, x: 0 };
+for (let i = 0; i < 30; i++) {
+  await drive(1);
+  await sleep(60);
+  strafeD = await serverRunner();
+  if (strafeD.vx < -1 && strafeD.x < -0.3) break;
+}
+await drive(0);
+await sleep(300);
+let strafeA = { vx: 0, x: 0 };
+for (let i = 0; i < 30; i++) {
+  await drive(-1);
+  await sleep(60);
+  strafeA = await serverRunner();
+  if (strafeA.vx > 1 && strafeA.x > -0.05) break;
+}
+await drive(0);
+await runner.ev('window.__relay3d.net.sendInput = window.__relay3d.__autoSend; delete window.__relay3d.__autoSend');
+await sleep(300);
+check(
+  "strafe: 'D' (s=1) moves screen-right (-X), 'A' (s=-1) moves screen-left (+X)",
+  strafeD.vx < -1 && strafeD.x < -0.05 && strafeA.vx > 1 && strafeA.x > strafeD.x,
+  `D(vx=${strafeD.vx.toFixed(2)}, x=${strafeD.x.toFixed(2)}) A(vx=${strafeA.vx.toFixed(2)}, x=${strafeA.x.toFixed(2)})`,
+);
+
 // --- Operator lever -> authoritative sim
 await focus(operator);
 await press(operator, 'KeyB');
@@ -136,13 +168,27 @@ check("Operator's lift is authoritative too", liftMoving === true || liftY > -0.
 // --- Bridge words -> runner ear + operator ear, and NOT to the bridge's own logic
 await focus(bridge);
 await press(bridge, 'Digit3');
-await sleep(600);
+// the rate-limit window is only 1.2 s: sample it while it is still up
+let bCool = false;
+for (let i = 0; i < 12; i++) {
+  await sleep(60);
+  bCool = await bridge.ev(`document.querySelector('.btn.phr')?.classList.contains('cool')`);
+  if (bCool) break;
+}
 await focus(runner);
-const rEar = await runner.ev(`document.querySelector('.ear')?.textContent || ''`);
+let rEar = '';
+for (let i = 0; i < 12; i++) {
+  rEar = await runner.ev(`document.querySelector('.ear')?.textContent || ''`);
+  if (rEar.includes('JUMP NOW')) break;
+  await sleep(60);
+}
 await focus(operator);
-const oVoice = await operator.ev(`document.querySelector('.voice')?.textContent || ''`);
-await focus(bridge);
-const bCool = await bridge.ev(`document.querySelector('.btn.phr')?.classList.contains('cool')`);
+let oVoice = '';
+for (let i = 0; i < 12; i++) {
+  oVoice = await operator.ev(`document.querySelector('.voice')?.textContent || ''`);
+  if (oVoice.includes('JUMP NOW')) break;
+  await sleep(60);
+}
 check("Bridge's word reaches the Runner's ear", rEar.includes('JUMP NOW'), `ear="${rEar}"`);
 check("Bridge's word reaches the Operator's ear", oVoice.includes('JUMP NOW'), `voice="${oVoice}"`);
 check('the Bridge is rate-limited to one word at a time', bCool === true);

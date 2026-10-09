@@ -285,8 +285,10 @@ export function step(s, dt, input) {
       st /= len;
     }
     const yaw = s.input.yaw || 0;
-    const dirX = Math.sin(yaw) * f + Math.cos(yaw) * st;
-    const dirZ = Math.cos(yaw) * f - Math.sin(yaw) * st;
+    // camera forward is (sin yaw, 0, cos yaw) and camera right is
+    // (-cos yaw, 0, sin yaw): 'D' (st = +1) must move to screen-right (-X)
+    const dirX = Math.sin(yaw) * f - Math.cos(yaw) * st;
+    const dirZ = Math.cos(yaw) * f + Math.sin(yaw) * st;
     const moving = Math.abs(f) + Math.abs(st) > 0.01;
     if (moving) {
       r.vx += dirX * TUNING.accel * dt;
