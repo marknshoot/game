@@ -106,12 +106,7 @@ canvas#view { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .callnow em { display: block; font-style: normal; color: #63748f; font-size: 10px; margin-top: 3px; }
 .callnow.call { border-color: var(--bad); background: #1d0d0be6; color: #ffd7d2; }
 .callnow .now { color: var(--bad); font-weight: 800; animation: blink .35s steps(2) infinite; }
-.callnow.knock { animation: shake .3s linear 2; border-color: var(--bad); }
 @keyframes blink { 50% { opacity: .15; } }
-@keyframes shake {
-  0%, 100% { transform: translate(0, 0); } 25% { transform: translate(4px, -3px); }
-  50% { transform: translate(-4px, 3px); } 75% { transform: translate(3px, 2px); }
-}
 
 /* -------------------------------------------------------------------- side */
 .side {

@@ -6,11 +6,15 @@ import { LEVEL } from '../../shared/level3d.js';
 import * as SIM from '../../shared/sim3d.js';
 import { createWorld, LAYER } from './world.js';
 import { createNet } from './net.js';
+import { createAudio } from './audio.js';
 
 const P = new URLSearchParams(location.search);
 const ROLE = ['runner', 'operator', 'bridge'].includes(P.get('role')) ? P.get('role') : 'runner';
 const ROOM = (P.get('room') || 'A').toUpperCase();
 const NAME = P.get('name') || '';
+
+// The Bridge is deaf by rule: createAudio('bridge') is a hard-muted no-op.
+const audio = createAudio(ROLE);
 
 const PHRASES = ['GO', 'WAIT', 'JUMP NOW', 'STOP', 'LEFT', 'RIGHT', 'THROW', 'ON ONE'];
 const PHRASE_KEYS = ['1', '2', '3', '4', '5', '6', 'T', 'O'];
@@ -36,7 +40,6 @@ let local = SIM.createState(); // prediction copy (Runner only)
 let sidebarRtt = 0;
 const clientGhost = [];
 let peers = [];
-let serverWelcome = null;
 let status = 'connecting';
 
 addEventListener('error', (e) => (window.__relay3d?.errors || []).push(`${e.message} @${e.lineno}:${e.colno}`));
@@ -49,7 +52,6 @@ const net = createNet({
   role: ROLE,
   name: NAME,
   onWelcome: (m) => {
-    serverWelcome = m;
     remote = m.snapshot;
     if (ROLE === 'runner') Object.assign(local, m.snapshot);
     status = 'playing';
@@ -70,7 +72,10 @@ const net = createNet({
     }
   },
   onSay: (m) => {
-    if (ROLE === 'operator') pushVoiceShot(m.from, m.text);
+    if (ROLE === 'operator') {
+      pushVoiceShot(m.from, m.text);
+      audio.say(m.text, 'runner'); // the Runner's shout reaches the Operator's ears
+    }
   },
   onStatus: (s) => {
     status = s;
@@ -116,6 +121,11 @@ let stampIcon = '▲';
 let autopilot = false;
 
 function bindInput() {
+  // browsers only allow audio after a gesture: unlock on the first one
+  const unlockAudio = () => audio.unlock();
+  addEventListener('pointerdown', unlockAudio, { once: true });
+  addEventListener('keydown', unlockAudio, { once: true });
+
   addEventListener('keydown', (e) => {
     if (e.repeat) return;
     keys.add(e.code);
@@ -206,7 +216,7 @@ function build() {
     const feel = h('div', { class: 'feel' });
     const coach = h('div', { class: 'coach' });
     const banner = h('div', { class: 'banner' });
-    const lock = h('div', { class: 'lock' }, 'click to look around · WASD move · SPACE jump');
+    const lock = h('div', { class: 'lock' }, 'click to look around · WASD move · SPACE jump · sound on');
     const shoutInput = h('input', { class: 'shout', placeholder: 'shout (only the Operator hears you)  ⏎' });
     shoutInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && shoutInput.value.trim()) {
@@ -313,6 +323,7 @@ function build() {
       h('h2', {}, 'TWO-MAN RULE'),
       keyBtn,
       h('div', { class: 'keybar' }, keyBar),
+      h('p', { class: 'hint' }, 'YOU ARE DEAF — no audio on this screen'),
       h('h2', {}, "OPERATOR'S STAMPS"),
       h('div', { class: 'feed' }, 'no stamps yet'),
       h('label', { class: 'auto' }, h('input', { type: 'checkbox', onchange: (e) => net.sendEvent({ type: 'auto', on: e.target.checked }) }), ' autopilot (demo)'),
@@ -453,6 +464,12 @@ let last = performance.now();
 let sendAcc = 0;
 let domAcc = 0;
 let showRunner = { x: 0, y: 0, z: 2, yaw: 0, vx: 0, vy: 0, vz: 0 };
+let stepAcc = 0.33;
+let shake = 0;
+let lastPhraseT = null;
+let lastKnockT = null;
+let lastDead = null;
+let lastWon = null;
 
 function frame(now) {
   const dt = Math.min(0.25, (now - last) / 1000);
@@ -460,6 +477,31 @@ function frame(now) {
 
   const s = stateOf();
   world.resize();
+
+  // one-shot edges: new phrase -> speech; new knock -> audio + camera shake.
+  // The Bridge is deaf, so it only gets the visual shake on the Runner's cam.
+  const ph = s.phrases[s.phrases.length - 1];
+  if (lastPhraseT === null) lastPhraseT = ph ? ph.t : -1;
+  else if (ph && ph.t !== lastPhraseT) {
+    lastPhraseT = ph.t;
+    if (ROLE !== 'bridge') audio.say(ph.text, 'bridge');
+  }
+  const k = s.knockFx[s.knockFx.length - 1];
+  if (lastKnockT === null) lastKnockT = k ? k.t : -1;
+  else if (k && k.t !== lastKnockT) {
+    lastKnockT = k.t;
+    if (ROLE !== 'bridge') audio.knock();
+    if (ROLE !== 'operator') shake = 0.35;
+  }
+  if (lastDead === null) {
+    lastDead = s.dead;
+    lastWon = s.won;
+  } else {
+    if (s.dead && !lastDead && ROLE !== 'bridge') audio.death();
+    if (s.won && !lastWon && ROLE !== 'bridge') audio.win();
+    lastDead = s.dead;
+    lastWon = s.won;
+  }
 
   // ---- runner: step the local prediction sim with the local input
   if (ROLE === 'runner') {
@@ -471,11 +513,21 @@ function frame(now) {
     acc += dt;
     let steps = 0;
     while (acc >= FIX) {
+      const wasGround = local.runner.ground;
+      const vyBefore = local.runner.vy;
       SIM.step(local, FIX, { yaw: input.yaw, f: input.f, s: input.s, jump: input.jump });
+      if (!wasGround && local.runner.ground) audio.land(Math.abs(vyBefore));
       acc -= FIX;
       steps++;
       if (steps > 8) break;
     }
+    if (local.runner.ground && Math.hypot(local.runner.vx, local.runner.vz) > 2) {
+      stepAcc += dt;
+      if (stepAcc >= 0.33) {
+        stepAcc = 0;
+        audio.footstep();
+      }
+    } else stepAcc = 0.33;
     sendAcc += dt;
     if (sendAcc > 1 / 30) {
       sendAcc = 0;
@@ -498,7 +550,10 @@ function frame(now) {
     trackGhost(showRunner, dt);
   }
 
-  world.update(s, { runner: showRunner, pitch: ROLE === 'runner' ? pitch : 0, ghost: clientGhost });
+  const view = { runner: showRunner, pitch: ROLE === 'runner' ? pitch : 0, ghost: clientGhost, shake };
+  world.update(s, view);
+  audio.update(s, view, dt);
+  if (shake > 0) shake = Math.max(0, shake - Math.min(dt, 0.05));
 
   const views = viewsFor();
   world.render(views.map((v) => ({ x: v.x, y: v.y, w: v.w, h: v.h, camera: v.cam })));
@@ -576,11 +631,6 @@ function updateDom(s) {
     keyBtn.classList.toggle('ready', s.exit.armed && s.exit.open < 0.9);
     keyBtn.classList.toggle('done', s.exit.open > 0.9);
     for (const btn of hud.bridge.phraseRow.querySelectorAll('.btn')) btn.classList.toggle('cool', s.phraseCd > 0);
-    const k = s.knockFx[s.knockFx.length - 1];
-    if (k && performance.now() / 1000 - (serverWelcome ? 0 : 0) - s.t + k.t > -0.5 && s.t - k.t < 0.9 && !beat.classList.contains('knock')) {
-      beat.classList.add('knock');
-      setTimeout(() => beat.classList.remove('knock'), 700);
-    }
     if (feedEl) feedEl.textContent = s.stamps.length ? s.stamps.slice(-4).map((x) => `${x.icon} @ z${x.z.toFixed(0)}`).join('  ') : 'no stamps yet';
   }
 }
@@ -604,6 +654,13 @@ window.__relay3d = {
   },
   world,
   net,
+  audio,
+  get audioEnabled() {
+    return audio.enabled;
+  },
+  get shake() {
+    return shake;
+  },
   THREE,
   LAYER,
   ev: (ev) => net.sendEvent(ev),

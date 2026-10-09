@@ -89,12 +89,23 @@ for (const [role, t] of Object.entries(tabs)) {
   check(`${role}: client connected to the server and is receiving snapshots`, ok);
 }
 
-const webgl = await runner.ev(`(() => {
-  const w = window.__relay3d.world;
-  return { calls: w.renderer.info.render.calls, tris: w.renderer.info.render.triangles,
-           masks: { runner: w.runnerCam.layers.mask, operator: w.operatorCam.layers.mask },
-           LAYER: window.__relay3d.LAYER };
-})()`);
+const webgl = await (async () => {
+  // the Runner tab may still be backgrounded/throttled right after boot; bring it
+  // up and give the render loop a beat so renderer.info has a completed frame
+  await focus(runner);
+  let info = null;
+  for (let i = 0; i < 30; i++) {
+    info = await runner.ev(`(() => {
+      const w = window.__relay3d.world;
+      return { calls: w.renderer.info.render.calls, tris: w.renderer.info.render.triangles,
+               masks: { runner: w.runnerCam.layers.mask, operator: w.operatorCam.layers.mask },
+               LAYER: window.__relay3d.LAYER };
+    })()`);
+    if (info.tris > 500) break;
+    await sleep(100);
+  }
+  return info;
+})();
 check('three.js is actually drawing the level', webgl.tris > 500 && webgl.calls > 5, `tris=${webgl.tris} calls=${webgl.calls}`);
 check(
   "the Runner's cam cannot see the Operator's board (layer isolation)",
@@ -150,6 +161,35 @@ await focus(bridge);
 const boardFeed = await bridge.ev(`[...document.querySelectorAll('.feed')].map(e=>e.textContent).join(' | ')`);
 const stamps = await bridge.ev('window.__relay3d.state.stamps.length');
 check("Operator's stamp reaches the Bridge's board", stamps >= 1, `stamps=${stamps} feed="${boardFeed.slice(0, 90)}"`);
+
+// --- audio channel: Runner + Operator hear the gantry, the Bridge is hard-muted
+const audioFlags = await runner.ev('({on: window.__relay3d.audioEnabled, update: typeof window.__relay3d.audio.update === "function"})');
+const opAudio = await operator.ev('window.__relay3d.audioEnabled');
+const brAudio = await bridge.ev('window.__relay3d.audioEnabled');
+check(
+  'audio is on for Runner + Operator and hard-muted for the deaf Bridge',
+  audioFlags.on === true && audioFlags.update === true && opAudio === true && brAudio === false,
+  `runner=${JSON.stringify(audioFlags)} operator=${opAudio} bridge=${brAudio}`,
+);
+
+// --- Operator knock -> audio for the Runner/Operator, and the knock is rendered
+//     as a short cam shake for the Runner and for the Bridge (who sees his cam)
+await focus(runner);
+await operator.ev('window.__relay3d.ev({type:"knock"})');
+let runnerShake = 0;
+for (let i = 0; i < 40 && runnerShake <= 0; i++) {
+  runnerShake = Math.max(runnerShake, await runner.ev('window.__relay3d.shake'));
+  await sleep(30);
+}
+check('Operator knock shakes the Runner cam', runnerShake > 0, `shake=${runnerShake}`);
+await bridge.send('Page.bringToFront');
+let bridgeShake = 0;
+for (let i = 0; i < 40 && bridgeShake <= 0; i++) {
+  bridgeShake = Math.max(bridgeShake, await bridge.ev('window.__relay3d.shake'));
+  await sleep(20);
+}
+const bridgeFlash = await bridge.ev('document.querySelector(".callnow")?.classList.contains("knock") === true');
+check('the deaf Bridge sees the same knock shake, with no UI flash', bridgeShake > 0 && bridgeFlash === false, `shake=${bridgeShake} flash=${bridgeFlash}`);
 
 // --- Runner's shout reaches the operator ONLY (the Bridge is deaf)
 await focus(runner);

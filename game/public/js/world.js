@@ -372,6 +372,17 @@ export function createWorld(canvas) {
     const r = view.runner;
     runnerCam.position.set(r.x, r.y + 1.55, r.z);
     runnerCam.rotation.set(view.pitch || 0, r.yaw + Math.PI, 0, 'YXZ');
+    // knock shake: the Runner feels it, and the Bridge sees the same shake on the
+    // Runner's cam (the Bridge is deaf, so the shake is his only knock cue)
+    if (view.shake > 0) {
+      const t = performance.now() * 0.001;
+      const a = 0.04 * Math.min(1, view.shake / 0.35);
+      runnerCam.rotation.x += Math.sin(t * 71) * a;
+      runnerCam.rotation.y += Math.sin(t * 59 + 1.7) * a * 0.7;
+      runnerCam.rotation.z += Math.sin(t * 83 + 0.4) * a;
+      runnerCam.position.x += Math.sin(t * 67 + 2.2) * a * 0.3;
+      runnerCam.position.y += Math.sin(t * 79 + 1.1) * a * 0.3;
+    }
 
     // dynamic world meshes (neutral: shape only, never state)
     const sp = state.span;
