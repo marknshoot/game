@@ -42,8 +42,14 @@ async function connect(t) {
       waiting.set(mid, { resolve, reject });
       ws.send(JSON.stringify({ id: mid, method, params }));
     });
-  const ev = async (expr) => {
-    const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
+  // a page that is navigating (role rotation reloads it) may never answer: time out instead
+  const ev = async (expr, ms = 30000) => {
+    const r = await Promise.race([
+      send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true }),
+      sleep(ms).then(() => {
+        throw new Error('evaluate timed out');
+      }),
+    ]);
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
     return r.result.value;
   };
@@ -168,26 +174,37 @@ check("Operator's lift is authoritative too", liftMoving === true || liftY > -0.
 // --- Bridge words -> runner ear + operator ear, and NOT to the bridge's own logic
 await focus(bridge);
 await press(bridge, 'Digit3');
-// the rate-limit window is only 1.2 s: sample it while it is still up
+// the rate limit is server state (phraseCd), mirrored by the buttons' 'cool' class;
+// sample it while the 1.2 s window is still up
 let bCool = false;
-for (let i = 0; i < 12; i++) {
-  await sleep(60);
-  bCool = await bridge.ev(`document.querySelector('.btn.phr')?.classList.contains('cool')`);
-  if (bCool) break;
+for (let i = 0; i < 20 && !bCool; i++) {
+  await sleep(40);
+  bCool = await bridge.ev(`window.__relay3d.state.phraseCd > 0 && window.__relay3d.state.phrases.length > 0`);
 }
-await focus(runner);
+const before = await bridge.ev('window.__relay3d.state.phrases.length');
+await press(bridge, 'Digit1'); // a second word inside the window must be dropped
+await sleep(300);
+const after = await bridge.ev('window.__relay3d.state.phrases.length');
+bCool = bCool && after === before;
+// the phrase is on screen for ~2.5-3 s; a backgrounded tab only repaints while in
+// front, so alternate between the two listeners until both have shown it
 let rEar = '';
-for (let i = 0; i < 12; i++) {
-  rEar = await runner.ev(`document.querySelector('.ear')?.textContent || ''`);
-  if (rEar.includes('JUMP NOW')) break;
-  await sleep(60);
-}
-await focus(operator);
 let oVoice = '';
-for (let i = 0; i < 12; i++) {
-  oVoice = await operator.ev(`document.querySelector('.voice')?.textContent || ''`);
-  if (oVoice.includes('JUMP NOW')) break;
-  await sleep(60);
+for (let i = 0; i < 24 && !(rEar.includes('JUMP NOW') && oVoice.includes('JUMP NOW')); i++) {
+  // headless tabs paint at ~2 fps: if a 2.5 s word was missed, say it again (rate limit permitting)
+  if (i % 6 === 5) {
+    await focus(bridge);
+    await sleep(1300);
+    await press(bridge, 'Digit3');
+  }
+  if (!rEar.includes('JUMP NOW')) {
+    await focus(runner);
+    for (let j = 0; j < 6 && !rEar.includes('JUMP NOW'); j++, await sleep(60)) rEar = await runner.ev(`document.querySelector('.ear')?.textContent || ''`);
+  }
+  if (!oVoice.includes('JUMP NOW')) {
+    await focus(operator);
+    for (let j = 0; j < 6 && !oVoice.includes('JUMP NOW'); j++, await sleep(60)) oVoice = await operator.ev(`document.querySelector('.voice')?.textContent || ''`);
+  }
 }
 check("Bridge's word reaches the Runner's ear", rEar.includes('JUMP NOW'), `ear="${rEar}"`);
 check("Bridge's word reaches the Operator's ear", oVoice.includes('JUMP NOW'), `voice="${oVoice}"`);
@@ -223,16 +240,21 @@ check(
 await focus(runner);
 await operator.ev('window.__relay3d.ev({type:"knock"})');
 let runnerShake = 0;
-for (let i = 0; i < 40 && runnerShake <= 0; i++) {
+for (let i = 0; i < 240 && runnerShake <= 0; i++) { // headless renders at ~2 fps
+  if (i === 120) await operator.ev('window.__relay3d.ev({type:"knock"})'); // a second knock, if the first frame was missed
   runnerShake = Math.max(runnerShake, await runner.ev('window.__relay3d.shake'));
   await sleep(30);
 }
 check('Operator knock shakes the Runner cam', runnerShake > 0, `shake=${runnerShake}`);
+// a background tab's render loop is throttled, so give the Bridge its own knock while in front
 await bridge.send('Page.bringToFront');
+await sleep(200);
+await operator.ev('window.__relay3d.ev({type:"knock"})');
 let bridgeShake = 0;
-for (let i = 0; i < 40 && bridgeShake <= 0; i++) {
+for (let i = 0; i < 240 && bridgeShake <= 0; i++) {
+  if (i === 120 && (await operator.ev('window.__relay3d.state.knocks')) > 0) await operator.ev('window.__relay3d.ev({type:"knock"})');
   bridgeShake = Math.max(bridgeShake, await bridge.ev('window.__relay3d.shake'));
-  await sleep(20);
+  await sleep(15);
 }
 const bridgeFlash = await bridge.ev('document.querySelector(".callnow")?.classList.contains("knock") === true');
 check('the deaf Bridge sees the same knock shake, with no UI flash', bridgeShake > 0 && bridgeFlash === false, `shake=${bridgeShake} flash=${bridgeFlash}`);
@@ -258,74 +280,177 @@ const inkAfter = await bridge.ev('window.__relay3d.state.ink');
 check('chalk crosses the network and spends the shared ink', chalkN >= 1 && inkAfter === inkBefore - 1, `chalk=${chalkN} ink ${inkBefore}->${inkAfter}`);
 
 // --- two-key exit
+// (an arm with no key expires after 3 s, and headless tabs render at ~2 fps, so the key is
+//  turned first and the lever pulled right after: the rule is the same either way round)
 await focus(operator);
 await press(operator, 'KeyE');
-await sleep(500);
-const armedState = await runner.ev('({armed: window.__relay3d.state.exit.armed, open: window.__relay3d.state.exit.open})');
+await sleep(400);
+const armedState = await operator.ev('({armed: window.__relay3d.state.exit.armed, open: window.__relay3d.state.exit.open})');
 check('Operator alone arms the exit but cannot open it', armedState.armed === true && armedState.open < 0.05, JSON.stringify(armedState));
-await focus(bridge);
 await bridge.ev(`window.__relay3d.ev({type:'key', down:true})`);
+if (!(await operator.ev('window.__relay3d.state.exit.armed'))) await operator.ev(`window.__relay3d.ev({type:'exit.lever'})`);
 await sleep(2900);
-const opened = await runner.ev('window.__relay3d.state.exit.open');
+const opened = await operator.ev('window.__relay3d.state.exit.open');
 await bridge.ev(`window.__relay3d.ev({type:'key', down:false})`);
 await sleep(1500);
-const closedAgain = await runner.ev('window.__relay3d.state.exit.open');
+const sealHolds = await operator.ev('window.__relay3d.state.exit.open');
+await sleep(2600);
+const closedAgain = await operator.ev('window.__relay3d.state.exit.open');
 check('Bridge key + Operator lever opens the exit over the network', opened > 0.9, `open=${opened}`);
-check('releasing the key closes the door again (hold-to-keep-open)', closedAgain < 0.2, `open=${closedAgain}`);
+check('once open, the seal holds ~2.5 s and then slams shut', sealHolds > 0.9 && closedAgain < 0.2, `open after 1.5 s=${sealHolds}, after 4.1 s=${closedAgain}`);
 
-// --- a full run over the network: the Operator's levers are driven from this
-//     script (standing in for a human) while the server runs the autopilot.
+// --- Phase 0: the demo autopilot is not part of the shipped screens
+const autoUi = {};
+for (const [role, t] of Object.entries(tabs)) autoUi[role] = await t.ev(`!!document.querySelector('.auto input') || window.__relay3d.DEBUG`);
+check('no autopilot control on any screen without ?debug=1', !autoUi.runner && !autoUi.operator && !autoUi.bridge, JSON.stringify(autoUi));
+await focus(runner);
+await press(runner, 'KeyP');
+await sleep(400);
+check("the Runner's P key does nothing without ?debug=1", (await operator.ev('window.__relay3d.state.runner.auto')) === false);
+
+// --- Phase 0: a key released while the window is unfocused must not stick.
+//     Real CDP keyboard input into the Runner tab, then the window loses focus.
+const key = (t, type, code, k, vk) => t.send('Input.dispatchKeyEvent', { type, code, key: k, windowsVirtualKeyCode: vk });
+// (at a station he only steers, so hold D: the strafe must stop when focus goes)
+await focus(runner);
+await key(runner, 'keyDown', 'KeyD', 'd', 68);
+await sleep(250);
+const heldBefore = await runner.ev('window.__relay3d.heldKeys.includes("KeyD")');
+await runner.ev('window.dispatchEvent(new Event("blur"))'); // what the OS does when focus moves away
+await sleep(400);
+const heldAfter = await runner.ev('({keys: window.__relay3d.heldKeys, s: window.__relay3d.input.s})');
+const xA = await operator.ev('window.__relay3d.state.runner.x');
+await sleep(800);
+const xB = await operator.ev('window.__relay3d.state.runner.x');
+await key(runner, 'keyUp', 'KeyD', 'd', 68);
+check(
+  'losing focus releases held keys (his strafe stops)',
+  heldBefore === true && heldAfter.keys.length === 0 && heldAfter.s === 0 && Math.abs(xB - xA) < 0.05,
+  `held=${heldBefore} after=${JSON.stringify(heldAfter)} x ${xA.toFixed(2)} -> ${xB.toFixed(2)}`,
+);
 await focus(operator);
+await press(operator, 'KeyE'); // the exit is disarmed after the two-key test: arm it
+await sleep(300);
+await focus(bridge);
+await key(bridge, 'keyDown', 'KeyK', 'k', 75);
+await sleep(300);
+const keyHeld = await operator.ev('window.__relay3d.state.key.held');
+await bridge.ev('document.dispatchEvent(new Event("visibilitychange"))');
+await bridge.ev('window.dispatchEvent(new Event("blur"))');
+await sleep(400);
+const keyAfter = await operator.ev('window.__relay3d.state.key.held');
+await key(bridge, 'keyUp', 'KeyK', 'k', 75);
+check("losing focus lets go of the Bridge's 2nd key", keyHeld === true && keyAfter === false, `held=${keyHeld} -> ${keyAfter}`);
+await focus(operator);
+await press(operator, 'KeyE'); // disarm again for the full run
+await sleep(300);
+
+// --- a full run over the network, on a fresh roll: the server runs the (debug) autopilot,
+//     this script plays the Operator from the Operator's tab and the Bridge from the Bridge's
+await operator.ev('window.__relay3d.ev({type:"reset"})');
+await sleep(400);
 await operator.ev('window.__relay3d.ev({type:"auto", on:true})');
 let won = false;
 let maxZ = 0;
-let threw = false;
-let lastLift = 0;
-let armed = false;
-for (let i = 0; i < 260; i++) {
-  const st = await operator.ev('({z: window.__relay3d.state.runner.z, y: window.__relay3d.state.runner.y, onLift: window.__relay3d.state.runner.onLift, span: window.__relay3d.state.span.phase, liftY: window.__relay3d.state.lift.y, armed: window.__relay3d.state.exit.armed, won: window.__relay3d.state.won, deaths: window.__relay3d.state.deaths})');
+const flags = {};
+for (let i = 0; i < 900 && !won; i++) {
+  const st = await operator.ev(`(() => { const s = window.__relay3d.state, r = s.runner;
+    return { z: r.z, y: r.y, onLift: r.onLift, committed: r.committed, section: s.section, span: s.span.phase, press: s.press.held,
+             liftY: s.lift.y, liftMoving: s.lift.moving, armed: s.exit.armed, won: s.won, dead: s.dead, attempt: s.attempt }; })()`);
   maxZ = Math.max(maxZ, st.z);
-  if (!threw && st.span === 'out' && st.z >= 5 && st.z <= 13) {
-    await operator.ev('window.__relay3d.ev({type:"span.throw"})');
-    threw = true;
+  if (st.dead || flags.attempt !== st.attempt) for (const k of Object.keys(flags)) delete flags[k];
+  flags.attempt = st.attempt;
+  const op = (ev) => operator.ev(`window.__relay3d.ev(${JSON.stringify(ev)})`);
+  if (st.section === 0 && st.committed && st.span === 'out' && st.z >= 13.2 && !flags.t) (flags.t = 1), await op({ type: 'span.throw' });
+  if (st.section === 2 && st.committed && !flags.p) (flags.p = 1), await op({ type: 'press', down: true });
+  if (st.section === 2 && st.z > 58.6 && st.press) await op({ type: 'press', down: false });
+  if (st.onLift && st.z > 63 && st.liftY < 0 && !st.liftMoving && !flags.l) (flags.l = 1), await op({ type: 'lift.toggle' });
+  if (st.section === 3 && !flags.e) {
+    flags.e = 1;
+    await op({ type: 'exit.lever' });
+    await bridge.ev(`window.__relay3d.ev({type:'key', down:true})`);
   }
-  // stand-in for a human Operator who is being told what the Bridge can see:
-  // raise it when he is on the deck, bring it back down when he is waiting next to it
-  const now = Date.now();
-  if (now - lastLift > 900) {
-    if (st.onLift && st.liftY < 0) {
-      await operator.ev('window.__relay3d.ev({type:"lift.toggle"})');
-      lastLift = now;
-    } else if (!st.onLift && st.liftY > -0.1 && st.z > 47 && st.z < 51.6) {
-      await operator.ev('window.__relay3d.ev({type:"lift.toggle"})');
-      lastLift = now;
-    }
-  }
-  // the lever is a toggle: only touch it if it is actually unarmed
-  if (st.z > 61.5 && st.y > 3.4 && !st.armed) {
-    await operator.ev('window.__relay3d.ev({type:"exit.lever"})');
-  }
-  await operator.ev(`window.__relay3d.ev({type:'key', down:${st.z > 61.5 && st.y > 3.4 && (st.armed || armed)}})`);
-  if (st.armed) armed = true;
-  if (st.won) {
-    won = true;
-    break;
-  }
-  await sleep(150);
+  if (st.won) won = true;
+  await sleep(25);
 }
+await bridge.ev(`window.__relay3d.ev({type:'key', down:false})`);
 const final = await operator.ev('({won: window.__relay3d.state.won, t: window.__relay3d.state.wonTime, lifts: window.__relay3d.state.stats.lifts, deaths: window.__relay3d.state.deaths})');
 check('a full run completes over the network (server-authoritative)', won === true, `${JSON.stringify(final)} maxZ=${maxZ.toFixed(1)}`);
 
-// --- screenshots of the three private screens
+// --- Phase 0: RUN AGAIN after a win. Two of the three players vote and the room restarts.
+await focus(runner); // its render loop (and so its DOM) only runs while it is in front
+let againHot = false;
+for (let i = 0; i < 40 && !againHot; i++) {
+  againHot = await runner.ev(`document.querySelector('#again')?.classList.contains('hot')`);
+  if (!againHot) await sleep(100);
+}
+const againAll = [];
+for (const t of Object.values(tabs)) againAll.push(await t.ev(`!!document.querySelector('#again')`));
+check('every screen has a RUN AGAIN button, lit up after the win', againAll.every(Boolean) && againHot === true, `buttons=${againAll} hot=${againHot}`);
+
+// screenshots of the win first, then restart
 await focus(runner);
 await sleep(400);
 writeFileSync(`${SHOTS}/3d-runner.png`, Buffer.from((await runner.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+
 await focus(operator);
+await press(operator, 'KeyR');
 await sleep(400);
-writeFileSync(`${SHOTS}/3d-operator.png`, Buffer.from((await operator.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+const half = await bridge.ev(`document.querySelector('#again').textContent`);
+const stillWon = await bridge.ev('window.__relay3d.state.won');
 await focus(bridge);
+await bridge.ev(`document.querySelector('#again').click()`);
+let restarted = null;
+for (let i = 0; i < 30; i++) {
+  await focus(runner);
+  restarted = await runner.ev(`({won: window.__relay3d.state.won, z: window.__relay3d.local.runner.z, ink: window.__relay3d.state.ink, knocks: window.__relay3d.state.knocks, deaths: window.__relay3d.state.deaths, chalk: window.__relay3d.state.chalk.length})`);
+  if (!restarted.won) break;
+  await sleep(100);
+}
+check('one vote shows 1/2 and does not restart', half.includes('1/2') && stillWon === true, `button="${half}" won=${stillWon}`);
+check(
+  'the second vote restarts every screen (Runner back at the start, ink + knocks refilled)',
+  restarted.won === false && restarted.z < 2.5 && restarted.ink === 6 && restarted.knocks === 3 && restarted.chalk === 0,
+  JSON.stringify(restarted),
+);
+
+// --- after a win with three players, RUN AGAIN rotated the roles: every tab reloads as
+//     the next one (Runner → Operator → Bridge → Runner), and the room fills up again
+await sleep(3500);
+const nowRole = {};
+for (const [was, t] of Object.entries(tabs)) {
+  for (let i = 0; i < 40; i++) {
+    nowRole[was] = await t.ev('window.__relay3d?.ROLE || null', 2000).catch(() => null);
+    if (nowRole[was] && nowRole[was] !== was) break;
+    await sleep(250);
+  }
+}
+check('RUN AGAIN after a win rotates every player to the next role', nowRole.runner === 'operator' && nowRole.operator === 'bridge' && nowRole.bridge === 'runner', JSON.stringify(nowRole));
+let full = '';
+for (let i = 0; i < 40; i++) {
+  full = await tabs.runner.ev('(window.__relay3d?.peers || []).map((p) => p.role).sort().join()', 2000).catch(() => '');
+  if (full === 'bridge,operator,runner') break;
+  await sleep(250);
+}
+check('...and all three seats are taken again in the same room', full === 'bridge,operator,runner', full);
+const runsLogged = await tabs.runner.ev('window.__relay3d.history.length', 5000).catch(() => 0);
+check('the finished run is in the room history shown to everyone', runsLogged >= 1, `runs=${runsLogged}`);
+// from here on, the tabs hold their new roles
+tabs.runner = tabs.bridge;
+tabs.bridge = tabs.operator;
+tabs.operator = (Object.values({ runner, operator, bridge }).find((t) => t !== tabs.runner && t !== tabs.bridge));
+const rot = { runner: tabs.runner, operator: tabs.operator, bridge: tabs.bridge };
+
+// --- screenshots of the three private screens
+await focus(rot.operator);
 await sleep(400);
-writeFileSync(`${SHOTS}/3d-bridge.png`, Buffer.from((await bridge.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+writeFileSync(`${SHOTS}/3d-operator.png`, Buffer.from((await rot.operator.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+await focus(rot.bridge);
+await sleep(400);
+writeFileSync(`${SHOTS}/3d-bridge.png`, Buffer.from((await rot.bridge.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+await focus(rot.runner);
+await sleep(600);
+writeFileSync(`${SHOTS}/3d-runner.png`, Buffer.from((await rot.runner.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
 console.log('\nscreenshots -> shots/3d-{runner,operator,bridge}.png');
 
 const allErrors = [

@@ -31,6 +31,8 @@ export function createAudio(role) {
   let hums = null;
   let unlocked = false;
   let lastArmed = null;
+  let lastPress = null;
+  let lastCollapse = null;
   let lastOpen = null;
 
   return {
@@ -234,12 +236,27 @@ export function createAudio(role) {
     const sliding = Math.abs(state.exit.open - lastOpen) > 0.002;
     lastOpen = state.exit.open;
     hums.door.gain.gain.setTargetAtTime(sliding ? 0.24 : 0, now, 0.05);
+
+    // the press: a heavy clunk when it tops out or slams home
+    const pp = state.press?.phase;
+    if (lastPress !== null && pp !== lastPress && (pp === 'up' || pp === 'down')) {
+      doorClunk({ x: 0, y: 2.5, z: (LEVEL.press.z0 + LEVEL.press.z1) / 2, gain: pp === 'down' ? 0.9 : 0.4 });
+    }
+    lastPress = pp ?? null;
+    // the collapse: a crack for every metre of catwalk that goes
+    if (state.collapse?.active) {
+      const zc = Math.floor(state.collapse.z);
+      if (lastCollapse !== null && zc > lastCollapse) doorClunk({ x: 0, y: LEVEL.catwalk.y, z: zc, gain: 0.35 });
+      lastCollapse = zc;
+    } else lastCollapse = null;
   }
 
+
   // --------------------------------------------------------------- one-shots
-  function doorClunk() {
+  function doorClunk(at) {
     if (!ctx) return;
     const E = LEVEL.exit;
+    const pos = at || { x: (E.x0 + E.x1) / 2, y: (E.y0 + E.y1) / 2, z: E.z, gain: 0.5 };
     const t = ctx.currentTime + 0.01;
     const o = ctx.createOscillator();
     o.type = 'square';
@@ -247,9 +264,9 @@ export function createAudio(role) {
     o.frequency.exponentialRampToValueAtTime(45, t + 0.16);
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.5, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(pos.gain, t + 0.006);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
-    const p = pannerAt((E.x0 + E.x1) / 2, (E.y0 + E.y1) / 2, E.z);
+    const p = pannerAt(pos.x, pos.y, pos.z);
     p.connect(master);
     o.connect(g).connect(p);
     o.start(t);

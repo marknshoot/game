@@ -1,12 +1,13 @@
 // RELAY 3D — WebSocket client. Talks to the authoritative server, measures RTT,
 // and hands snapshots to the caller.
-export function createNet({ room, role, name, onWelcome, onSnapshot, onPlayers, onError, onSay, onStatus }) {
+export function createNet({ room, role, name, onWelcome, onSnapshot, onPlayers, onError, onSay, onStatus, onVotes, onReset }) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const url = `${proto}://${location.host}/ws`;
   let ws = null;
   let rtt = 0;
   let pingTimer = null;
   let closed = false;
+  const extra = new Map(); // type -> [fn]: message types owned by other modules (voice)
 
   function connect() {
     ws = new WebSocket(url);
@@ -22,6 +23,7 @@ export function createNet({ room, role, name, onWelcome, onSnapshot, onPlayers, 
       } catch {
         return;
       }
+      for (const fn of extra.get(m.t) || []) fn(m);
       switch (m.t) {
         case 'welcome':
           onWelcome?.(m);
@@ -37,6 +39,12 @@ export function createNet({ room, role, name, onWelcome, onSnapshot, onPlayers, 
           break;
         case 'say':
           onSay?.(m);
+          break;
+        case 'votes':
+          onVotes?.(m);
+          break;
+        case 'reset':
+          onReset?.(m.snapshot);
           break;
         case 'pong':
           rtt = Math.round(performance.now() - m.c);
@@ -66,6 +74,12 @@ export function createNet({ room, role, name, onWelcome, onSnapshot, onPlayers, 
     sendInput: (input) => send({ t: 'input', ...input }),
     sendEvent: (ev) => send({ t: 'ev', ev }),
     say: (text) => send({ t: 'say', text }),
+    voteRestart: (on) => send({ t: 'restart', on }),
+    send,
+    on(type, fn) {
+      if (!extra.has(type)) extra.set(type, []);
+      extra.get(type).push(fn);
+    },
     close() {
       closed = true;
       clearInterval(pingTimer);

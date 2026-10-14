@@ -1,23 +1,30 @@
 // RELAY 3D — the three private screens. One canvas, up to two viewports, and a
-// HUD per role. The Runner's cam and the Operator's board are separate layers of
-// the same scene, so neither role *can* see the other's information.
+// HUD per role. The Runner's cam, the Operator's board and the Bridge's copy of the board
+// are different layer masks of the same scene, so no role *can* see another's information.
 import * as THREE from '../vendor/three.module.js';
-import { LEVEL } from '../../shared/level3d.js';
+import { LEVEL, LANE_NAME } from '../../shared/level3d.js';
 import * as SIM from '../../shared/sim3d.js';
 import { createWorld, LAYER } from './world.js';
 import { createNet } from './net.js';
 import { createAudio } from './audio.js';
+import { createVoice } from './voice.js';
 
 const P = new URLSearchParams(location.search);
 const ROLE = ['runner', 'operator', 'bridge'].includes(P.get('role')) ? P.get('role') : 'runner';
-const ROOM = (P.get('room') || 'A').toUpperCase();
+const ROOM = (P.get('room') || 'A').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'A';
+// demo/automation helpers (autopilot) only exist with ?debug=1; the server also refuses
+// them unless it was started with --debug
+const DEBUG = P.get('debug') === '1';
 const NAME = P.get('name') || '';
+// ?assist=1 gives the Bridge distances, ETAs and CALL NOW prompts (a tutorial crutch:
+// without it, judging the moment is the Bridge's job)
+const ASSIST = P.get('assist') === '1';
 
 // The Bridge is deaf by rule: createAudio('bridge') is a hard-muted no-op.
 const audio = createAudio(ROLE);
 
-const PHRASES = ['GO', 'WAIT', 'JUMP NOW', 'STOP', 'LEFT', 'RIGHT', 'THROW', 'ON ONE'];
-const PHRASE_KEYS = ['1', '2', '3', '4', '5', '6', 'T', 'O'];
+const PHRASES = ['GO', 'WAIT', 'JUMP NOW', 'LEFT', 'RIGHT', 'BRACE', 'UP', 'ARM', 'THROW', 'ON ONE'];
+const PHRASE_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', 'T', 'O'];
 const CHALK_DIRS = ['forward', 'left', 'right', 'down'];
 const SONAR_CD = 3.5;
 
@@ -41,6 +48,8 @@ let local = SIM.createState(); // prediction copy (Runner only)
 let sidebarRtt = 0;
 const clientGhost = [];
 let peers = [];
+let votes = { roles: [], need: 2 };
+let history = [];
 let status = 'connecting';
 
 addEventListener('error', (e) => (window.__relay3d?.errors || []).push(`${e.message} @${e.lineno}:${e.colno}`));
@@ -55,6 +64,8 @@ const net = createNet({
   onWelcome: (m) => {
     remote = m.snapshot;
     if (ROLE === 'runner') Object.assign(local, m.snapshot);
+    voice?.setPlayers(m.players);
+    history = m.history || [];
     status = 'playing';
   },
   onSnapshot: (s) => {
@@ -64,6 +75,7 @@ const net = createNet({
   onPlayers: (p) => {
     peers = p;
     renderPeers();
+    voice?.setPlayers(p);
   },
   onError: (m) => {
     if (m.code === 'role_taken') {
@@ -78,12 +90,45 @@ const net = createNet({
       audio.say(m.text, 'runner'); // the Runner's shout reaches the Operator's ears
     }
   },
+  onVotes: (m) => {
+    votes = m;
+    renderVotes();
+  },
+  onReset: (snap) => {
+    // a fresh run: adopt everything, including the Runner's own body
+    remote = snap;
+    local = JSON.parse(JSON.stringify(snap));
+    autopilot = false;
+    clientGhost.length = 0;
+    showRunner = { ...snap.runner };
+    toast('RUN AGAIN — fresh run, fresh dice');
+  },
   onStatus: (s) => {
     status = s;
     const el = document.querySelector('#netstat');
     if (el) el.textContent = s === 'connected' ? `${ROOM} · ${ROLE}` : s;
   },
 });
+
+net.on('history', (m) => {
+  history = m.runs || [];
+});
+// after a win, RUN AGAIN rotates the roles: reload into the next one
+net.on('rotate', (m) => {
+  if (!['runner', 'operator', 'bridge'].includes(m.role)) return;
+  const q = new URLSearchParams(location.search);
+  q.set('role', m.role);
+  toast(`ROLES ROTATE — you are the ${m.role.toUpperCase()} now`);
+  setTimeout(() => location.replace(`play.html?${q}`), 900);
+});
+
+// ------------------------------------------------------------------- voice
+// Runner: hold SHIFT to talk to the Operator. Bridge: hold SPACE to talk to both.
+// M toggles an open mic. The Operator has no mic; the Bridge hears nothing.
+const PTT_KEYS = ROLE === 'runner' ? ['ShiftLeft', 'ShiftRight'] : ROLE === 'bridge' ? ['Space'] : [];
+const PTT_LABEL = ROLE === 'runner' ? 'SHIFT' : 'SPACE';
+const voice = createVoice({ role: ROLE, net, onChange: () => renderVoice() });
+voice.start();
 
 // ---------------------------------------------------- prediction for the Runner
 const predict = {
@@ -107,6 +152,8 @@ const predict = {
       l.ground = r.ground;
       l.onLift = r.onLift;
       l.dead = r.dead;
+      l.committed = r.committed;
+      l.brace = r.brace;
       l.vx += (r.vx - l.vx) * 0.2;
       l.vz += (r.vz - l.vz) * 0.2;
     }
@@ -123,19 +170,32 @@ let autopilot = false;
 
 function bindInput() {
   // browsers only allow audio after a gesture: unlock on the first one
-  const unlockAudio = () => audio.unlock();
+  const unlockAudio = () => {
+    audio.unlock();
+    voice.resume();
+  };
   addEventListener('pointerdown', unlockAudio, { once: true });
   addEventListener('keydown', unlockAudio, { once: true });
 
   addEventListener('keydown', (e) => {
     if (e.repeat) return;
     keys.add(e.code);
+    if (PTT_KEYS.includes(e.code)) voice.setPtt(true);
     if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
     onKeyDown(e.code);
   });
   addEventListener('keyup', (e) => {
     keys.delete(e.code);
-    if (e.code === 'KeyK') net.sendEvent({ type: 'key', down: false });
+    if (PTT_KEYS.includes(e.code)) e.preventDefault(); // SPACE must not also click a focused button
+    if (PTT_KEYS.includes(e.code) && !PTT_KEYS.some((k) => keys.has(k))) voice.setPtt(false);
+    if (e.code === 'KeyK' && ROLE === 'bridge') net.sendEvent({ type: 'key', down: false });
+    if (e.code === 'KeyH' && ROLE === 'operator') net.sendEvent({ type: 'press', down: false });
+  });
+  // a key released while this window is not focused never sends its keyup: without
+  // this the Runner keeps running (and the Bridge keeps holding the key) forever
+  addEventListener('blur', releaseAll);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseAll();
   });
   canvas.addEventListener('click', (e) => {
     if (ROLE === 'runner') canvas.requestPointerLock?.();
@@ -143,17 +203,37 @@ function bindInput() {
   addEventListener('mousemove', (e) => {
     if (ROLE !== 'runner') return;
     if (document.pointerLockElement !== canvas) return;
-    input.yaw -= e.movementX * 0.0022; // mouse right turns the view right (-X)
+    // mouse right turns the view right (-X); he runs down the gantry, so the look is clamped
+    input.yaw = Math.max(-1.1, Math.min(1.1, input.yaw - e.movementX * 0.0022));
     pitch = Math.max(-1.0, Math.min(0.9, pitch - e.movementY * 0.0022));
   });
 }
 
+function releaseAll() {
+  keys.clear();
+  input.f = 0;
+  input.s = 0;
+  input.jump = false;
+  if (ROLE === 'runner') net.sendInput(input);
+  if (ROLE === 'bridge') net.sendEvent({ type: 'key', down: false });
+  if (ROLE === 'operator') net.sendEvent({ type: 'press', down: false });
+  voice.setPtt(false);
+}
+
 function onKeyDown(code) {
+  if (code === 'KeyR') {
+    toggleVote();
+    return;
+  }
+  if (code === 'KeyM' && PTT_KEYS.length) {
+    voice.toggleOpen();
+    return;
+  }
   if (ROLE === 'runner' && code === 'KeyQ') {
     fireSonar();
     return;
   }
-  if (code === 'KeyP') {
+  if (DEBUG && code === 'KeyP') {
     autopilot = !autopilot;
     net.sendEvent({ type: 'auto', on: autopilot });
     toast(autopilot ? 'autopilot on (demo helper)' : 'autopilot off');
@@ -161,6 +241,7 @@ function onKeyDown(code) {
   }
   if (ROLE === 'operator') {
     if (code === 'KeyB') net.sendEvent({ type: 'span.throw' });
+    if (code === 'KeyH') net.sendEvent({ type: 'press', down: true });
     if (code === 'KeyF') net.sendEvent({ type: 'lift.toggle' });
     if (code === 'KeyE') net.sendEvent({ type: 'exit.lever' });
     if (code === 'KeyN') knock();
@@ -169,10 +250,10 @@ function onKeyDown(code) {
     if (code === 'Digit9') selectStamp(2);
   }
   if (ROLE === 'bridge') {
-    const i = '123456'.indexOf(code.replace('Digit', ''));
+    const i = code.startsWith('Digit') ? '12345678'.indexOf(code.slice(5)) : -1;
     if (i >= 0) sendPhrase(PHRASES[i]);
-    if (code === 'KeyT') sendPhrase(PHRASES[6]);
-    if (code === 'KeyO') sendPhrase(PHRASES[7]);
+    if (code === 'KeyT') sendPhrase('THROW');
+    if (code === 'KeyO') sendPhrase('ON ONE');
     if (code === 'KeyK') net.sendEvent({ type: 'key', down: true });
     if (code === 'KeyC') {
       chalkDir = CHALK_DIRS[(CHALK_DIRS.indexOf(chalkDir) + 1) % CHALK_DIRS.length];
@@ -204,7 +285,7 @@ function quickChalk() {
     type: 'chalk',
     x: Math.max(-3.4, Math.min(3.4, r.x + dx)),
     y: 0,
-    z: Math.max(0.5, Math.min(68, r.z + dz)),
+    z: Math.max(0.5, Math.min(89, r.z + dz)),
     dir: chalkDir,
   });
 }
@@ -220,12 +301,14 @@ function build() {
   app.append(stage);
 
   // --- always-on chrome
+  stage.append(h('div', { class: 'voicebar', id: 'voicebar', role: 'status', 'aria-live': 'polite' }));
   stage.append(
     h(
       'div',
       { class: 'chrome' },
       h('span', { id: 'netstat', class: 'netstat' }, 'connecting…'),
       h('span', { class: 'peers', id: 'peers' }),
+      h('button', { class: 'again', id: 'again', onclick: () => toggleVote() }, 'RUN AGAIN', kbd('R')),
       h('a', { class: 'lobby', href: 'index.html' }, 'lobby'),
     ),
   );
@@ -235,7 +318,10 @@ function build() {
     const feel = h('div', { class: 'feel' });
     const coach = h('div', { class: 'coach' });
     const banner = h('div', { class: 'banner' });
-    const lock = h('div', { class: 'lock' }, 'click to look around · WASD move · SPACE jump · Q sonar · sound on');
+    const lock = h('div', { class: 'lock' }, 'click to look · W go (no stopping) · A/D steer · S brace · SPACE jump · Q sonar · hold SHIFT to talk to the Operator');
+    const station = h('div', { class: 'station' });
+    const braceBar = h('i');
+    const brace = h('div', { class: 'brace', title: 'S brace — 1.2 s per section' }, h('span', {}, 'BRACE'), h('b', {}, braceBar));
     const vigDeath = h('div', { class: 'vignette vignette-death' });
     const vigWin = h('div', { class: 'vignette vignette-win' });
     const sonarEl = h('div', { class: 'sonar ready' }, '[Q] SONAR');
@@ -254,13 +340,15 @@ function build() {
       h('div', { class: 'crosshair' }),
       ear,
       feel,
+      station,
+      brace,
       banner,
       lock,
       h('div', { class: 'shoutrow' }, shoutInput),
       coach,
       sonarEl,
     );
-    hud.runner = { ear, feel, coach, banner, lock, sonar: sonarEl, vigDeath, vigWin, shout: pushVoiceShot, selfShots: h('div', { class: 'selfshots' }) };
+    hud.runner = { ear, feel, coach, banner, lock, station, braceBar, sonar: sonarEl, vigDeath, vigWin, shout: pushVoiceShot, selfShots: h('div', { class: 'selfshots' }) };
     camRegion.append(hud.runner.selfShots);
     setTimeout(() => lock.classList.add('fade'), 6000);
   }
@@ -270,12 +358,14 @@ function build() {
     const shots = h('div', { class: 'shots' });
     const feed = h('div', { class: 'feed' });
     const coach = h('div', { class: 'coach' });
-    boardRegion.append(h('div', { class: 'boardlabel' }, 'YOUR BOARD — state, hazards, timings. No runner.'), coach);
+    boardRegion.append(h('div', { class: 'boardlabel' }, 'YOUR BOARD — states, timings, and the LIES in the hall (red: only you see them). No runner.'), coach);
+    const holdPress = (down) => () => net.sendEvent({ type: 'press', down });
     const side = h(
       'aside',
       { class: 'side' },
       h('h2', {}, 'CONTROL'),
       h('button', { class: 'btn big', onclick: () => net.sendEvent({ type: 'span.throw' }) }, 'THROW SLIDE BRIDGE', kbd('B')),
+      h('button', { class: 'btn big', onpointerdown: holdPress(true), onpointerup: holdPress(false), onpointerleave: holdPress(false) }, 'HOLD THE PRESS UP', kbd('H')),
       h('button', { class: 'btn big', onclick: () => net.sendEvent({ type: 'lift.toggle' }) }, 'LIFT UP / DOWN', kbd('F')),
       h('button', { class: 'btn big', onclick: () => net.sendEvent({ type: 'exit.lever' }) }, 'EXIT LEVER', kbd('E')),
       h('button', { class: 'btn big', onclick: knock }, 'KNOCK', kbd('N'), h('b', { class: 'knocks' }, '3')),
@@ -285,14 +375,14 @@ function build() {
         { class: 'row' },
         ...['▲', '⧗', '✓'].map((ic, i) => h('button', { class: 'btn stamp', dataset: { i: String(i) }, onclick: () => selectStamp(i) }, ic)),
       ),
-      h('p', { class: 'hint' }, 'then click your board to drop it in front of the Bridge'),
+      h('p', { class: 'hint' }, 'then click your board: the Bridge sees your stamps on his copy, which does NOT show the red lies'),
       h('h2', {}, 'VOICE — the Bridge (you hear them)'),
       voice,
       h('h2', {}, 'EAR — the Runner (you hear them; you cannot answer)'),
       shots,
       h('h2', {}, 'SYSTEM'),
       feed,
-      h('label', { class: 'auto' }, h('input', { type: 'checkbox', onchange: (e) => net.sendEvent({ type: 'auto', on: e.target.checked }) }), ' autopilot (demo)'),
+      DEBUG ? h('label', { class: 'auto' }, h('input', { type: 'checkbox', onchange: (e) => net.sendEvent({ type: 'auto', on: e.target.checked }) }), ' autopilot (debug)') : null,
     );
     app.append(side);
     hud.operator = { voice, shots, feed, coach, side };
@@ -338,7 +428,7 @@ function build() {
     const vigDeath = h('div', { class: 'vignette vignette-death' });
     const vigWin = h('div', { class: 'vignette vignette-win' });
     camRegion.append(vigDeath, vigWin, h('div', { class: 'boardlabel' }, "RUNNER'S CAM — what he sees, fogged to ~13 m"), earSide);
-    boardRegion.append(h('div', { class: 'boardlabel' }, "OPERATOR'S BOARD — state and hazards"), beat, coach);
+    boardRegion.append(h('div', { class: 'boardlabel' }, "THE BOARD — states and the Operator's stamps (not the lies: he has to stamp them)"), beat, coach);
     const side = h(
       'aside',
       { class: 'side' },
@@ -346,21 +436,39 @@ function build() {
       phraseRow,
       h('h2', {}, 'CHALK — 6 marks, on his visor'),
       chalkRow,
-      h('p', { class: 'hint' }, 'click his cam to place · ink ', ink, ' · ', kbd('C'), ' cycle · ', kbd('V'), ' ahead'),
+      h('p', { class: 'hint' }, 'click his cam or your board to place · ink ', ink, ' · ', kbd('C'), ' cycle · ', kbd('V'), ' ahead'),
       h('h2', {}, 'TWO-MAN RULE'),
       keyBtn,
       h('div', { class: 'keybar' }, keyBar),
       h('p', { class: 'hint' }, 'YOU ARE DEAF — no audio on this screen'),
       h('h2', {}, "OPERATOR'S STAMPS"),
       h('div', { class: 'feed' }, 'no stamps yet'),
-      h('label', { class: 'auto' }, h('input', { type: 'checkbox', onchange: (e) => net.sendEvent({ type: 'auto', on: e.target.checked }) }), ' autopilot (demo)'),
+      DEBUG ? h('label', { class: 'auto' }, h('input', { type: 'checkbox', onchange: (e) => net.sendEvent({ type: 'auto', on: e.target.checked }) }), ' autopilot (debug)') : null,
     );
     app.append(side);
     hud.bridge = { beat, earSide, coach, ink, keyBar, keyBtn, phraseRow, chalkRow, side, vigDeath, vigWin, feedEl: side.querySelector('.feed') };
   }
 
+  const score = h('div', { class: 'scoreboard', id: 'scoreboard', role: 'status', 'aria-live': 'polite' });
+  stage.append(score);
   canvas.addEventListener('click', onCanvasClick, true);
 }
+
+function renderScore(s) {
+  const el = document.querySelector('#scoreboard');
+  if (!el) return;
+  el.classList.toggle('on', !!s.won);
+  if (!s.won) return;
+  const three = peers.length === 3;
+  const rows = history
+    .slice(-6)
+    .map((r) => `<tr><td>#${r.n}</td><td>${r.time.toFixed(1)} s</td><td>${r.deaths} fall${r.deaths === 1 ? '' : 's'}</td><td>R ${esc(r.roles.runner || '—')} · O ${esc(r.roles.operator || '—')} · B ${esc(r.roles.bridge || '—')}</td></tr>`)
+    .join('');
+  el.innerHTML = `<h2>CLEAR — ${s.wonTime.toFixed(1)} s · ${s.deaths} fall${s.deaths === 1 ? '' : 's'}</h2>
+    <table>${rows}</table>
+    <p>${three ? '<b>RUN AGAIN</b> (R, two votes): the roles rotate, so everyone plays all three.' : '<b>RUN AGAIN</b> (R) for a fresh roll of the gantry.'}</p>`;
+}
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 let hud = {};
 function toast(msg) {
@@ -388,6 +496,64 @@ function renderPeers() {
     })
     .join(' · ');
 }
+// ------------------------------------------------------------ voice HUD
+const ROLE_NAME = { runner: 'RUNNER', operator: 'OPERATOR', bridge: 'BRIDGE' };
+let voiceLevel = 0;
+function renderVoice() {
+  const el = document.querySelector('#voicebar');
+  if (!el) return;
+  const v = voice.state;
+  const rows = [];
+  if (ROLE === 'operator') rows.push('<span class="vx dim">MUTE — no mic</span>');
+  else {
+    const to = v.speaks.map((r) => ROLE_NAME[r]).join(' + ');
+    let mic = '';
+    if (v.mic === 'on') {
+      const live = v.live ? 'live' : '';
+      mic = `<span class="vx mic ${live}">${v.live ? '● TALKING' : '○ MIC'} → ${to}</span>` +
+        `<i class="meter"><b style="width:${Math.round(Math.min(1, voiceLevel * 3) * 100)}%"></b></i>` +
+        `<span class="vx dim">hold ${PTT_LABEL}${v.open ? ' · <b class="openmic">OPEN MIC</b> (M)' : ' · M open mic'}</span>`;
+    } else if (v.mic === 'insecure') {
+      mic = v.httpsUrl
+        ? `<span class="vx warn">voice needs https — <a href="${v.httpsUrl}">open the https address</a></span>`
+        : '<span class="vx warn">voice needs https (start the server with https on)</span>';
+    } else if (v.mic === 'asking') mic = '<span class="vx dim">allow the microphone…</span>';
+    else if (v.mic === 'denied') mic = '<span class="vx warn">mic blocked by the browser — allow it in the address bar</span>';
+    else if (v.mic === 'disabled') mic = '<span class="vx dim">mic off (lobby setting) — phrase wheel only</span>';
+    else if (v.mic === 'unavailable') mic = '<span class="vx warn">no microphone found</span>';
+    rows.push(mic);
+  }
+  if (ROLE === 'bridge') rows.push('<span class="vx dim">DEAF — no incoming voice</span>');
+  else {
+    const chips = v.hears.map((r) => {
+      const linked = voice.links().some((l) => l.dir === 'in' && l.id.startsWith(r + '>') && l.conn === 'connected');
+      return `<span class="chip ${v.talking[r] ? 'talk' : ''} ${linked ? '' : 'off'}">${ROLE_NAME[r]}${v.talking[r] ? ' speaking' : ''}</span>`;
+    });
+    rows.push(`<span class="vx dim">you hear</span> ${chips.join(' ')}${v.blocked ? ' <span class="vx warn">click to hear voice</span>' : ''}`);
+  }
+  el.innerHTML = rows.map((r) => `<div>${r}</div>`).join('');
+}
+async function pollVoiceLevel() {
+  if (voice.state.mic !== 'on') return;
+  const st = await voice.stats();
+  voiceLevel = Math.max(0, ...st.filter((x) => x.dir === 'out').map((x) => x.level));
+  renderVoice();
+}
+
+function myVote() {
+  return votes.roles.includes(ROLE);
+}
+function toggleVote() {
+  net.voteRestart(!myVote());
+}
+function renderVotes() {
+  const el = document.querySelector('#again');
+  if (!el) return;
+  const n = votes.roles.length;
+  el.firstChild.textContent = n ? `RUN AGAIN ${n}/${votes.need}` : 'RUN AGAIN';
+  el.classList.toggle('voted', myVote());
+  el.title = n ? `voted: ${votes.roles.join(', ')}` : 'two players restart the room';
+}
 function selectStamp(i) {
   stampIcon = ['▲', '⧗', '✓'][i];
   for (const b of document.querySelectorAll('.btn.stamp')) b.classList.toggle('on', b.dataset.i === String(i));
@@ -411,16 +577,20 @@ function onCanvasClick(e) {
     if (px < r.left - rect.left || px > r.right - rect.left || py < r.top - rect.top || py > r.bottom - rect.top) continue;
     const dpr = Math.min(2, devicePixelRatio || 1);
     const local = { x: (r.left - rect.left) * dpr, y: (r.top - rect.top) * dpr, w: r.width * dpr, h: r.height * dpr };
-    const cam = el.dataset.view === 'cam' ? world.runnerCam : world.operatorCam;
+    const cam = camFor(el.dataset.view);
     const p = world.pick(cam, px, py, local);
     if (!p) return;
-    if (ROLE === 'bridge' && el.dataset.view === 'cam') net.sendEvent({ type: 'chalk', ...p, dir: chalkDir });
+    if (ROLE === 'bridge') net.sendEvent({ type: 'chalk', ...p, dir: chalkDir });
     if (ROLE === 'operator' && el.dataset.view === 'board') net.sendEvent({ type: 'stamp', icon: stampIcon, x: p.x, z: p.z });
     return;
   }
 }
 
 // -------------------------------------------------------------- coach lines
+function camFor(view) {
+  if (view === 'cam') return world.runnerCam;
+  return ROLE === 'bridge' ? world.bridgeBoardCam : world.operatorCam;
+}
 function stateOf() {
   return ROLE === 'runner' ? local : remote;
 }
@@ -428,41 +598,52 @@ function nextBeat(s) {
   const r = s.runner;
   for (const b of LEVEL.beats) {
     const d = b.z - r.z;
-    if (d < -2) continue;
+    if (d < (b.kind === 'hall' ? -18 : -2)) continue;
     const speed = Math.max(0.1, Math.hypot(r.vx, r.vz) || SIM.TUNING.runSpeed);
     return { ...b, dist: d, eta: d / speed, call: d <= b.callLead && d > b.callLead - 4.5 };
   }
   return null;
 }
+const STATION_TIP = [
+  'START. Line up where the Bridge says (A / D), then W. You cannot stop until the next station.',
+  'HALL DOOR. Nine floor tiles, six are lies, and they all look the same to you. Follow the chalk; cross between lanes at the seam.',
+  'PRESS BAY. Go on the Bridge\'s count: the press is only up while the Operator holds it. Then stand on the lift and wait.',
+  'CATWALK. Once you go it falls away behind you. Jump the gap. The door at the end must already be opening.',
+];
 function coachRunner(s) {
   const r = s.runner;
   if (s.won) return 'CLEAR — you made it out.';
-  if (s.dead) return 'You fell. To you the world is only shape: the floor at z44 is a lie, the span at z18 is only there if someone throws it.';
-  const d = LEVEL.gap.z0 - r.z;
-  if (d > -1 && d < 6 && s.span.phase === 'out') return 'FEEL: a dead slide-out span at z18. Only the OPERATOR can throw it, and only the BRIDGE can tell them where you are.';
-  if (r.z > 44.4 && r.z < 60) return 'Underfoot: concrete. Trust the Bridge about what is not there.';
-  if (r.z > 50 && r.z < 56.5 && r.y < 1) return 'A deck at z51. It only moves if the OPERATOR moves it, and it only moves at the right moment if the BRIDGE can see you standing on it.';
-  if (r.z > 60 && r.z < 64) return 'The exit is a slab until both keys are satisfied. You cannot see which. Wait for the Bridge.';
-  return 'BLIND: 13 metres of fog, no labels, no timers, no map. Everything you know comes from one voice.';
+  if (s.dead && s.deathCause === 'crushed') return 'Crushed. The press is only up while the Operator holds it — go on the count.';
+  if (s.dead) return 'You fell. Every floor looks the same to you; the gantry re-rolls when you come back.';
+  if (!r.committed) return STATION_TIP[s.section] || '';
+  if (r.onLift) return 'On the deck. Only the Operator can raise it, and only the Bridge can see you are on it.';
+  return 'BLIND: 13 metres of fog, no labels, no timers, no map. S braces you, once, for 1.2 s.';
 }
 function coachOperator(s) {
   if (s.won) return 'Clear.';
-  if (s.span.lockUntil > s.t) return `MOTOR OVERHEAT — locked ${(s.span.lockUntil - s.t).toFixed(1)}s. Two throws inside 8 s.`;
-  if (s.span.phase === 'extended') return `SPAN OUT — retracts in ${s.span.timer.toFixed(1)}s.`;
-  if (s.lift.moving) return `LIFT MOVING to ${(s.lift.target - LEVEL.lift.down).toFixed(1)} m…`;
-  if (s.exit.armed && s.exit.open < 0.9) return `EXIT ARMED — the Bridge must hold the 2nd key (${s.key.hold.toFixed(1)}/${SIM.TUNING.keyHoldTime}s).`;
-  if (s.knocks === 0) return 'No knocks left. Stamps only.';
-  return 'You are MUTE and you cannot see the Runner. Stamps and KNOCKs are your voice; lever timing is your handwriting.';
+  if (s.span.lockUntil > s.t) return `MOTOR OVERHEAT — locked ${(s.span.lockUntil - s.t).toFixed(1)} s. Two throws inside 8 s.`;
+  if (s.span.phase === 'extended') return `SPAN OUT — retracts in ${s.span.timer.toFixed(1)} s.`;
+  if (s.press.lockUntil > s.t) return `PRESS OVERHEAT — locked ${(s.press.lockUntil - s.t).toFixed(1)} s.`;
+  if (s.press.phase === 'up') return `PRESS UP — it slams in ${(SIM.TUNING.pressMaxHold - s.press.holdT).toFixed(1)} s or when you let go.`;
+  if (s.lift.moving) return 'LIFT MOVING…';
+  if (s.exit.phase === 'open') return `EXIT OPEN — seals in ${s.exit.stay.toFixed(1)} s.`;
+  if (s.exit.armed) return `EXIT ARMED — the Bridge has ${(SIM.TUNING.armWindow - s.exit.armT).toFixed(1)} s to start turning the key (${s.key.hold.toFixed(1)}/${SIM.TUNING.keyHoldTime} s).`;
+  if (s.section === 0) return `The span slides out in the ${spanLaneName(s)} lane this time. Throw it on the Bridge's call — you cannot see him.`;
+  if (s.section === 1) return 'The RED tiles are lies. Only you see them: stamp ✓ on the true ones (or ▲ on the lies) so the Bridge can chalk his path.';
+  if (s.section === 2) return 'Hold H to keep the press up on the Bridge\'s count, at most 1.2 s. Raise the LIFT only when told he is on it.';
+  return 'Arm the EXIT when the Bridge asks: an arm with no key in 3 s expires. You cannot see the catwalk falling.';
 }
+const spanLaneName = (s) => LANE_NAME[s.layout?.spanLane ?? 1];
 function coachBridge(s) {
   const b = nextBeat(s);
   if (s.won) return 'Clear. Log the time.';
-  if (s.dead) return 'He died. The ghost trail on his cam shows where he actually was — was your last call stale?';
-  if (!b) return 'DEAF: no audio, no voice from anyone. Your eyes are his cam and the Operator\'s board.';
-  if (b.kind === 'span') return `SPAN (${b.label}): 0.7 s to slide out + the Operator's reaction. Call THROW about a second before he reaches the edge.`;
-  if (b.kind === 'pit') return `PHANTOM FLOOR (${b.label}): he CANNOT see it. Say JUMP when he is ~${b.callLead.toFixed(1)} m out.`;
-  if (b.kind === 'lift') return `LIFT (${b.label}): you are the only one who can see that he is standing on it. Tell the Operator to raise it, and tell him to WAIT.`;
-  return `TWO-KEY EXIT (${b.label}): the Operator arms it, you hold the key until he is through. He cannot see the door's state.`;
+  if (s.dead) return 'He died. The ghost trail on his cam shows where he really was — was your call stale?';
+  if (!b) return "DEAF: no audio, no voice from anyone. Your eyes are his cam and the board.";
+  if (b.kind === 'span') return `SPAN: it slides out in the ${spanLaneName(s)} lane — tell him where to stand before he goes. Then call THROW about a second before the edge.`;
+  if (b.kind === 'hall') return "DARK HALL: you can't see the lies. Read the Operator's stamps on your board, chalk his path, call LEFT / RIGHT.";
+  if (b.kind === 'press') return 'PRESS: count "3, 2, 1" — the Operator lifts on ONE, the Runner goes on ONE.';
+  if (b.kind === 'lift') return 'LIFT: you are the only one who can see he is on the deck. Tell the Operator UP.';
+  return 'FINALE: ask for ARM, turn the key (K), then GO. The catwalk falls behind him; the door must open before he gets there.';
 }
 
 // ------------------------------------------------------------------- the loop
@@ -481,7 +662,7 @@ function viewsFor() {
       y: Math.round((stageRect.bottom - r.bottom) * dpr),
       w,
       h,
-      cam: el.dataset.view === 'cam' ? world.runnerCam : world.operatorCam,
+      cam: camFor(el.dataset.view),
     });
   }
   return out;
@@ -606,6 +787,9 @@ function trackGhost(r, dt) {
 const lastPhrase = { text: '', at: 0 };
 function updateDom(s) {
   sidebarRtt = net.rtt;
+  document.querySelector('#again')?.classList.toggle('hot', !!s.won);
+  renderScore(s);
+  pollVoiceLevel();
   const stat = document.querySelector('#netstat');
   if (stat) stat.textContent = `${net.connected ? '●' : '○'} room ${ROOM} · ${ROLE} · ${net.rtt} ms`;
 
@@ -617,13 +801,15 @@ function updateDom(s) {
     ear.textContent = phraseRecent ? ph.text : '';
     ear.classList.toggle('hot', !!phraseRecent);
     const r = s.runner;
+    // shape only: nothing here may leak a state the Runner cannot see
     let f = '';
-    if (r.z > 15 && r.z < 18.6 && s.span.phase === 'out') f = 'you feel: a dead slide-out span';
-    if (r.z > 61 && r.z < 64 && s.exit.open < 0.9) f = 'you feel: a bolted slab';
-    if (r.z > 43.5 && r.z < 44.2 && r.y < 0.4) f = 'you feel: solid concrete';
+    if (r.z > LEVEL.exit.z - 1.2 && r.z < LEVEL.exit.z && r.y > 3.5 && s.exit.open < 0.9) f = 'you feel: a bolted slab';
     feel.textContent = f;
+    const st = LEVEL.stations[s.section];
+    hud.runner.station.innerHTML = !r.committed && !s.dead && !s.won ? `<b>STATION ${s.section + 1} · ${st.name}</b>press <kbd>W</kbd> to go — no stopping after that` : '';
+    hud.runner.braceBar.style.width = `${(100 * r.brace) / SIM.TUNING.braceTime}%`;
     coach.textContent = coachRunner(s);
-    banner.textContent = s.won ? 'CLEAR ' + s.wonTime.toFixed(2) + 's' : s.dead ? 'YOU FELL — respawning' : '';
+    banner.textContent = s.won ? '' /* the scoreboard says it */ : s.dead ? (s.deathCause === 'crushed' ? 'CRUSHED — respawning' : 'YOU FELL — respawning') : '';
     banner.className = 'banner ' + (s.won ? 'win' : s.dead ? 'die' : '');
     vigDeath.classList.toggle('on', !!s.dead);
     vigWin.classList.toggle('on', !!s.won);
@@ -648,9 +834,11 @@ function updateDom(s) {
   if (ROLE === 'bridge' && hud.bridge) {
     const { beat, earSide, coach, ink, keyBar, keyBtn, feedEl, vigDeath, vigWin } = hud.bridge;
     const b = nextBeat(s);
-    const now = b && b.call && b.kind !== 'exit' && b.kind !== 'lift';
+    // without ?assist=1 the Bridge gets no distances or prompts: judging the moment is his job
+    const now = ASSIST && b && b.call && s.runner.committed && (b.kind === 'span' || b.kind === 'press');
+    const where = !s.runner.committed && !s.dead && !s.won ? ` · <span class="hold">HE IS AT STATION ${s.section + 1}</span>` : '';
     beat.innerHTML = b
-      ? `<b>${b.label}</b> — ${b.dist.toFixed(1)} m / ${b.eta.toFixed(2)} s ${now ? '<span class="now">◀ CALL NOW</span>' : ''}<em>${b.why}</em>`
+      ? `<b>${b.label}</b>${ASSIST ? ` — ${b.dist.toFixed(1)} m / ${b.eta.toFixed(2)} s` : ''}${where} ${now ? '<span class="now">◀ CALL NOW</span>' : ''}<em>${b.why}</em>`
       : 'NEXT: —';
     beat.classList.toggle('call', !!now);
     earSide.textContent = s.stamps.length
@@ -706,10 +894,26 @@ window.__relay3d = {
   ev: (ev) => net.sendEvent(ev),
   say: (t) => net.say(t),
   view: () => showRunner,
+  DEBUG,
+  voice,
+  get votes() {
+    return votes;
+  },
+  get history() {
+    return history;
+  },
+  ASSIST,
+  get heldKeys() {
+    return [...keys];
+  },
+  get input() {
+    return { ...input };
+  },
   errors: [],
 };
 
 build();
+renderVoice();
 paintChalkButtons();
 selectStamp(0);
 bindInput();

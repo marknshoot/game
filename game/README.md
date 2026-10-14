@@ -6,7 +6,7 @@ three.js vendored locally so it needs no internet.
 
 ```bash
 cd game
-node server.js                # prints http://<your-lan-ip>:8791/
+node server.js                # prints https://<your-lan-ip>:9791/  (and http on :8791)
 ```
 
 Open that address on all three laptops, use the same **room code**, pick a different role on each.
@@ -25,30 +25,67 @@ The isolation is structural, not a convention: the Runner's camera and the Opera
 `operatorCam.layers` = board only). There is no code path that could show one the other's
 information by accident. The LAN test asserts the layer masks.
 
-## The level (GANTRY RELAY)
+## The level (GANTRY RELAY) — one showcase level, four sections
 
-One gantry, ~64 m, four beats, all of them measured by `test/tune3d.mjs`:
+~86 m, four sections, each starting at a **station** where the Runner may line up and steer but
+not move forward. `W` commits him: from then on he runs at 6.6 m/s and **cannot stop** until the
+next station (`S` braces to 3 m/s for 1.2 s per section). So every plan is made at the station and
+executed live. Every death re-rolls the hazards, so nobody can memorise them.
 
-1. **z18 — the span.** A slide bridge the Operator throws; 0.7 s of travel, holds 2.6 s, motor
-   locks after two throws inside 8 s. Operator throw window `z ∈ [4, 15]` (1.8 s wide).
-   The Runner cannot see whether it is out without spending a sonar pulse, and cannot stop anyway.
-2. **z44 — the phantom floor.** A floor plate over a hole, drawn with the *same mesh and material*
-   as real floor. Only the Operator's board shows `▲`. Runner jump window `z ∈ [41, 44.5]`,
-   Bridge call window `d ∈ [1.5, 5] m` — the level's `callLead` is 4.5 m, the middle of it.
-3. **z51 — the lift.** A deck the Operator raises. Neither of them can tell whether the Runner is
-   *on* it — only the Bridge's cam can, so this beat is a state relay, not a timing relay.
-4. **z57 — the catwalk jump and the two-key exit (z63).** The Operator arms the door, the Bridge
-   *holds* the second key while the Runner crosses: release early and the door closes in front of him.
-5. Falling off the catwalk is not death (you land in the corridor and take the lift again).
-   Falling in the two holes is. Death is a 1 s respawn at the last checkpoint.
+1. **Span (z18).** A one-lane slide bridge across the gap; the lane is re-rolled each attempt and
+   only drawn on the board. The Bridge lines him up, says GO, then THROW; the Operator's throw
+   window is 0.89 s (Runner at z 12.7–18.6).
+2. **Dark hall (z30–48).** Nine identical floor tiles, three true. **Only the Operator sees the
+   lies** (a layer the Bridge's copy of the board does not render). He stamps the true tiles,
+   the Bridge chalks the path on the Runner's visor, the Runner steers through it blind.
+   Guessing gets through 2% of the time; the sonar lights lies and real floor identically.
+3. **Press and lift (z56–64).** A crusher the Operator holds up with `H` (max 1.2 s, then it
+   slams): the Bridge counts ON ONE and both go together (0.92 s window). Then the lift, raised
+   only when the Bridge sees him standing on it.
+4. **Collapse and two-key exit (z64–86).** Committing starts the catwalk falling away behind him
+   at his own speed; one jump (0.42 s take-off window). The Operator arms the door, the Bridge
+   holds the second key within 3 s, the door opens 1.5 s later and stays open 2.5 s.
+
+After a win with three players, RUN AGAIN **rotates the roles** (Runner → Operator → Bridge →
+Runner) and the room keeps a scoreboard of runs. `?assist=1` shows the Bridge distances and
+call timing; without it he judges by eye.
 
 ## Controls
 
 | Screen | Keys | Mouse |
 |---|---|---|
-| Runner | WASD · SPACE jump · arrows turn · `Q` sonar · `P` autopilot · ⏎ shout (reaches the Operator only) | click to look (pointer lock) |
-| Operator | `B` span · `F` lift · `E` exit lever · `N` knock · `7/8/9` stamp | click the board to drop a stamp |
-| Bridge | `1..6` GO/WAIT/JUMP NOW/STOP/LEFT/RIGHT · `T` THROW · `O` ON ONE · `K` hold the 2nd key · `C` cycle chalk · `V` chalk ahead | click his cam to paint chalk |
+| Runner | `W` go (no stopping after) · `A/D` steer · `S` brace · SPACE jump · arrows turn · `Q` sonar · hold `SHIFT` to talk (the Operator hears you) · ⏎ typed shout | click to look (pointer lock) |
+| Operator | `B` span · hold `H` press up · `F` lift · `E` exit lever · `N` knock · `7/8/9` stamp | click the board to drop a stamp |
+| Bridge | hold `SPACE` to talk (Runner + Operator hear you) · `1..8` GO/WAIT/JUMP NOW/LEFT/RIGHT/BRACE/UP/ARM · `T` THROW · `O` ON ONE · `K` hold the 2nd key · `C` cycle chalk · `V` chalk ahead | click his cam to paint chalk |
+| Everyone | `R` or **RUN AGAIN** votes for a fresh run; two votes restart the room (one, if you are alone) | |
+
+The demo autopilot (`P`) only exists for testing: start the server with `node server.js --debug`
+and open the game with `?debug=1`. A normal server refuses it, and the raw reset event, from every client.
+
+## Voice
+
+Built in, peer-to-peer over the LAN, and routed by role — the disabilities are enforced, not asked for:
+
+| speaker | heard by | key |
+|---|---|---|
+| Bridge | Runner + Operator | hold `SPACE` (or `M` for an open mic) |
+| Runner | Operator only | hold `SHIFT` (or `M`) |
+| Operator | nobody — no mic is ever opened | |
+
+Each allowed direction is its own one-way WebRTC connection (audio only). The server relays
+signaling **only** along those three links ([`shared/voice-rules.js`](shared/voice-rules.js)) and
+refuses any offer/answer that would send the other way, add video or open a data channel, so a
+modified client can neither talk to the deaf Bridge nor give the mute Operator a voice. Talking
+lights go only to the roles who can hear. No STUN/TURN: nothing leaves the network. Measured on
+a LAN: ~35 ms jitter buffer plus a 20 ms Opus frame, versus ~0.35 s for the TTS phrase wheel,
+which stays as the fallback for players without a mic.
+
+**Browsers only allow the microphone on https** (or `localhost`). The server therefore also
+listens on `port + 1000` (9791) with a self-signed certificate it generates on first run for this
+laptop's LAN addresses (needs `openssl`; stored in `game/.cert/`, git-ignored, never served).
+Each player clicks through the certificate warning once. On plain http the HUD links the https
+address. The lobby has a mic test and a device picker. Use headphones, or the game's own sound
+leaks into your mic. `--no-https` turns it off.
 
 ## Architecture
 
@@ -63,14 +100,21 @@ game/
   public/js/main.js      per-role HUD, input, prediction, coach lines
   public/js/audio.js     role-gated procedural WebAudio (bridge = hard-muted no-op)
   public/js/net.js       WebSocket client (RTT, snapshots, events)
+  public/js/voice.js     role-routed WebRTC voice: mic, push-to-talk, one connection per link
+  shared/voice-rules.js  who hears whom + the SDP direction check     (both sides)
   public/vendor/three.module.js   three.js r160, vendored (no CDN, no internet needed)
 ```
 
-- **The server owns the world.** 60 Hz fixed-step sim per room, 30 Hz snapshot broadcast, 0.7 KB per
-  snapshot. The Runner's client runs the same sim locally for prediction and corrects toward the
+- **The server owns the world.** 60 Hz fixed-step sim per room, 30 Hz snapshot broadcast, ~0.65 KB per
+  snapshot, bounded at ~1.4 KB in a busy session (event logs are trimmed to what clients still show). The Runner's client runs the same sim locally for prediction and corrects toward the
   authoritative snapshot (0.22 blend, hard snap above 2.5 m). This is why a player's browser being
   hidden or throttled no longer freezes anyone else — the lesson from the 2D prototype.
 - **Roles are exclusive per room**; a role with no player simply does nothing that level needs.
+- **The server enforces who may do what.** Levers, knocks and stamps are accepted from the Operator only;
+  phrases, chalk and the second key from the Bridge only; the Runner sends only movement and his shout.
+  A modified client cannot let one player do everyone's job. Event payloads are clamped, frames above
+  16 KB close the socket, a Runner whose input stops arriving (frozen tab) stops running, and a Bridge
+  who disconnects lets go of the key.
 - **The Runner's voice** (typed here, spoken on the Operator's machine via `speechSynthesis`)
   reaches the Operator only: the Operator is mute, the Bridge is deaf. The server enforces the routing.
 - **Sound is a private channel too.** `audio.js` is procedural WebAudio (no files): filtered-noise
@@ -82,8 +126,8 @@ game/
 
 ## Honest limits
 
-No voice chat (LAN players usually have Discord; the phrase wheel is spoken via TTS, so the rate
-limit is real). One level. No enemies. The prediction is a light lerp, not a rollback
+Voice is enforced only inside the game: three friends on Discord or in one room can still all
+talk. Voice is LAN-only (no TURN server for the internet). One level, not yet playtested by humans. No enemies. The prediction is a light lerp, not a rollback
 netcode. The Operator's board is an elevation view, so left/right position on the catwalk is not
 readable — deliberate, since they are not supposed to see the Runner anyway. Three.js is r160 (2023)
 because it is vendored; upgrading is a one-file swap.
@@ -91,8 +135,11 @@ because it is vendored; upgrading is a one-file swap.
 ## Verify it
 
 ```bash
-node ../test/tune3d.mjs     # headless: beat windows, lift, two-key rule, full autopilot run
-node ../test/lan3d.mjs      # three real browser tabs over WebSocket: 24 checks
+node ../test/tune3d.mjs     # headless: beat windows, re-rolls, Monte Carlo of the human chain, 60-seed autopilot
+node ../test/phase0.mjs     # integrity over raw WebSockets (normal server): 28 checks
+node ../test/voice-proto.mjs  # voice routing at the protocol level + https: 23 checks
+node ../test/voice3d.mjs    # real WebRTC between three Chrome tabs with a fake mic: 19 checks
+node ../test/lan3d.mjs      # three real browser tabs over WebSocket (--debug server): 34 checks
 ./../test/run.sh            # everything, 2D and 3D
 ```
 
@@ -100,5 +147,5 @@ node ../test/lan3d.mjs      # three real browser tabs over WebSocket: 24 checks
 the Operator's lever crosses the network, the Bridge's word reaches both other screens and is
 rate-limited, the Operator's stamp reaches *only* the Bridge, the Runner's shout reaches the
 Operator but never the deaf Bridge, the Bridge is hard-muted while the knock renders as a runner-cam
-shake, chalk spends shared ink across machines, the two-key exit needs both machines, and a full
-server-side run completes.
+shake, chalk spends shared ink across machines, the two-key exit needs both machines, a full
+server-side run completes, and RUN AGAIN rotates every tab into its next role.
