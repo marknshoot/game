@@ -1,8 +1,7 @@
 // RELAY 3D — procedural audio. Zero dependencies and no audio files: every sound
 // is synthesized from WebAudio oscillators, noise buffers, filters and gain
 // envelopes. The Bridge is DEAF as a game rule, so createAudio('bridge') returns
-// hard-muted no-ops that never construct an AudioContext and never call
-// speechSynthesis, not even by accident.
+// hard-muted no-ops that never construct an AudioContext, not even by accident.
 import { LEVEL } from '../../shared/level3d.js';
 import { TUNING } from '../../shared/sim3d.js';
 
@@ -17,7 +16,6 @@ export function createAudio(role) {
       update: mute,
       sonar: mute,
       knock: mute,
-      say: mute,
       footstep: mute,
       land: mute,
       death: mute,
@@ -41,7 +39,6 @@ export function createAudio(role) {
     update,
     sonar,
     knock,
-    say,
     footstep,
     land,
     death,
@@ -418,25 +415,5 @@ export function createAudio(role) {
       o.stop(t + 0.3);
       freeOnEnd(o, g);
     });
-  }
-
-  function say(text, voice) {
-    if (!unlocked || !text) return;
-    const synth = window.speechSynthesis;
-    if (!synth || typeof window.SpeechSynthesisUtterance !== 'function') return;
-    try {
-      const u = new SpeechSynthesisUtterance(String(text));
-      u.rate = 1.15;
-      if (voice === 'runner') u.pitch = 0.92;
-      else if (voice === 'bridge') u.pitch = 1.05;
-      if (voice && typeof voice === 'object') u.voice = voice;
-      else if (voice && synth.getVoices) {
-        const v = synth.getVoices().find((x) => (x.name || '').toLowerCase().includes(String(voice).toLowerCase()));
-        if (v) u.voice = v;
-      }
-      synth.speak(u);
-    } catch {
-      /* speech is a nicety; never let it break the game */
-    }
   }
 }

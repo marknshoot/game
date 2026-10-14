@@ -1,6 +1,6 @@
 // RELAY 3D — WebSocket client. Talks to the authoritative server, measures RTT,
 // and hands snapshots to the caller.
-export function createNet({ room, role, name, onWelcome, onSnapshot, onPlayers, onError, onSay, onStatus, onVotes, onReset }) {
+export function createNet({ room, role, name, onWelcome, onSnapshot, onPlayers, onError, onStatus, onVotes, onReset }) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const url = `${proto}://${location.host}/ws`;
   let ws = null;
@@ -37,9 +37,6 @@ export function createNet({ room, role, name, onWelcome, onSnapshot, onPlayers, 
         case 'error':
           onError?.(m);
           break;
-        case 'say':
-          onSay?.(m);
-          break;
         case 'votes':
           onVotes?.(m);
           break;
@@ -73,7 +70,6 @@ export function createNet({ room, role, name, onWelcome, onSnapshot, onPlayers, 
     },
     sendInput: (input) => send({ t: 'input', ...input }),
     sendEvent: (ev) => send({ t: 'ev', ev }),
-    say: (text) => send({ t: 'say', text }),
     voteRestart: (on) => send({ t: 'restart', on }),
     send,
     on(type, fn) {

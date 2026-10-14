@@ -20,8 +20,9 @@ CHROME_FLAGS=(--headless=new --no-sandbox --enable-unsafe-swiftshader --use-angl
 
 PROTO_PORT=8099
 CDP2D=9222
-GAME_PORT=8791
-GAME_PORT_STRICT=8792
+# off the game's default port (8791), so a server you are playing on is never tested by mistake
+GAME_PORT="${GAME_PORT:-8891}"
+GAME_PORT_STRICT="${GAME_PORT_STRICT:-8892}"
 CDP3D=9223
 CDPV=9224
 # Chrome's fake microphone (a beep), no permission prompt, voice may autoplay, and the
@@ -66,6 +67,11 @@ if [[ "$WHAT" == "all" || "$WHAT" == "3d" ]]; then
   echo "════════════ 3D LAN GAME (server-authoritative, three browser tabs) ════════════"
   # the browser suite drives the demo autopilot, so it needs a --debug server;
   # the integrity suite runs against a normal one, exactly as players get it
+  for p in "$GAME_PORT" "$GAME_PORT_STRICT" "$((GAME_PORT_STRICT + 1000))"; do
+    if curl -s "http://127.0.0.1:$p/" >/dev/null 2>&1 || curl -sk "https://127.0.0.1:$p/" >/dev/null 2>&1; then
+      echo "port $p is already in use: stop that server or set GAME_PORT / GAME_PORT_STRICT"; exit 1
+    fi
+  done
   node game/server.js "$GAME_PORT" --debug >"$L3D" 2>&1 & PIDS+=($!)
   node game/server.js "$GAME_PORT_STRICT" >"$L3S" 2>&1 & PIDS+=($!)
   "$CHROME" "${CHROME_FLAGS[@]}" --remote-debugging-port="$CDP3D" --user-data-dir="$P3D" about:blank >/dev/null 2>&1 & PIDS+=($!)

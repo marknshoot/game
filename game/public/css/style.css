@@ -59,13 +59,6 @@ canvas#view { position: absolute; inset: 0; width: 100%; height: 100%; display: 
   position: absolute; left: 50%; top: 50%; width: 3px; height: 3px; margin: -1px 0 0 -1px;
   background: #ffffff88; border-radius: 50%; box-shadow: 0 0 6px #000;
 }
-.ear {
-  position: absolute; left: 50%; top: 16%; transform: translateX(-50%);
-  font-family: ui-monospace, monospace; font-weight: 800; font-size: 34px; letter-spacing: 4px;
-  color: var(--chalk); text-shadow: 0 2px 18px #000, 0 0 30px #ffd25755;
-  opacity: .0; transition: opacity .12s; white-space: nowrap;
-}
-.ear.hot { opacity: 1; }
 .feel {
   position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%);
   font-family: ui-monospace, monospace; font-size: 13px; color: #9fb3d0;
@@ -102,12 +95,6 @@ canvas#view { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 }
 .sonar.ready { color: var(--accent); border-color: #24506b; box-shadow: 0 0 12px #38bdf833; }
 .sonar.charging { color: #63748f; }
-.shoutrow { position: absolute; left: 50%; bottom: 2.5%; transform: translateX(-50%); width: min(560px, 70%); }
-.shout {
-  width: 100%; background: #0b111cd9; border: 1px solid var(--line); color: var(--ink);
-  padding: 7px 10px; border-radius: 8px; font: inherit; font-size: 12px;
-}
-.selfshots { position: absolute; left: 12px; bottom: 12px; font-size: 11px; color: #8ea3c4; font-family: ui-monospace, monospace; }
 .coach {
   position: absolute; left: 12px; right: 12px; bottom: 6%; font-size: 12px; line-height: 1.5;
   color: #b9c9e4; text-shadow: 0 1px 8px #000; max-width: 62ch;
@@ -262,4 +249,25 @@ th { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var
 
 /* showcase polish: keep HUD text out of each other's way */
 .role-bridge .boardlabel { left: auto; right: 12px; text-align: right; }
-.role-runner .coach { bottom: 15%; max-width: 52ch; }
+.role-runner .coach { bottom: 9%; max-width: 52ch; }
+
+/* ------------------------------------------------------------------ inspector */
+.chrome .inspectbar { pointer-events: auto; display: inline-flex; gap: 4px; align-items: center; }
+.chrome .inspectbar b { color: var(--warn); letter-spacing: 1px; margin-right: 4px; }
+.chrome .insp {
+  cursor: pointer; font: inherit; font-weight: 700; letter-spacing: 1px; padding: 3px 8px; border-radius: 6px;
+  background: #111a2a; color: var(--dim); border: 1px solid #28374f;
+}
+.chrome .insp:hover, .chrome .insp:focus-visible { color: var(--ink); border-color: var(--accent); outline: none; }
+.chrome .insp.on { color: #05070c; background: var(--warn); border-color: var(--warn); }
+.inspecting .side button, .inspecting .side input { pointer-events: none; opacity: 0.45; }
+.inspecting .lock { display: none !important; }
+.inspecting .region[data-view] { cursor: default; }
+.peers .inspchip { color: var(--warn); }
+.takeover .btn.big { display: inline-block; text-decoration: none; margin-top: 8px; }
+.inspectline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 18px; font-size: 13px; }
+.inspectline .btn { text-decoration: none; }
+.inspectline .btn.hot { color: #05070c; background: var(--warn); border-color: var(--warn); }
+.inspectline .btn[aria-disabled] { opacity: 0.45; pointer-events: none; }
+.rolecard.taken { opacity: 0.5; }
+.rolecard.taken h3::after { content: ' · TAKEN'; color: var(--bad); font-size: 11px; letter-spacing: 1px; }

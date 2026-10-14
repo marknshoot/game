@@ -35,16 +35,19 @@ const INPUT_STALE_MS = 1000; // a Runner who stops sending input stops running
 const VOTE_TTL_MS = 15_000;
 
 // Who may do what. The roles' disabilities are rules, so the server enforces them:
-// the Operator is mute (no phrases), the Bridge holds the chalk and the 2nd key,
-// and the Runner only has his body (input) and his voice (say, Operator-only).
+// the Operator is mute, the Bridge holds the chalk and the 2nd key, the Runner only has
+// his body (input). Talking is voice only (see voice-rules.js). An inspector watches any
+// screen and may do nothing at all.
+const PLAYER_ROLES = ['runner', 'operator', 'bridge'];
 const ALLOWED = {
   operator: new Set(['span.throw', 'press', 'lift.toggle', 'exit.lever', 'knock', 'stamp']),
-  bridge: new Set(['phrase', 'chalk', 'key']),
+  bridge: new Set(['chalk', 'key']),
   runner: new Set(),
 };
 const DEBUG_EVENTS = new Set(['auto', 'reset']);
 
 function eventAllowed(role, type, debug = DEBUG) {
+  if (!PLAYER_ROLES.includes(role)) return false;
   if (DEBUG_EVENTS.has(type)) return debug;
   return !!ALLOWED[role]?.has(type);
 }
@@ -108,11 +111,16 @@ function playersMessage(room) {
 // ------------------------------------------------------------- restart vote
 // RUN AGAIN needs two of the players in the room (or the only one, if alone),
 // so nobody can wipe a run the others are in the middle of.
+function playerCount(room) {
+  let n = 0;
+  for (const c of room.clients.values()) if (PLAYER_ROLES.includes(c.role)) n++;
+  return n;
+}
 function votesNeeded(room) {
-  return Math.min(2, room.clients.size);
+  return Math.min(2, playerCount(room));
 }
 function presentRoles(room) {
-  return new Set([...room.clients.values()].map((c) => c.role));
+  return new Set([...room.clients.values()].map((c) => c.role).filter((r) => PLAYER_ROLES.includes(r)));
 }
 function votesMessage(room) {
   return { t: 'votes', roles: [...room.votes.keys()], need: votesNeeded(room) };
@@ -132,7 +140,7 @@ function vote(room, role, on) {
   pruneVotes(room);
   if (on) room.votes.set(role, Date.now());
   else room.votes.delete(role);
-  if (room.clients.size > 0 && room.votes.size >= votesNeeded(room)) {
+  if (playerCount(room) > 0 && room.votes.size >= votesNeeded(room)) {
     restartRoom(room);
     return;
   }
@@ -148,6 +156,7 @@ function restartRoom(room) {
   room.logged = false;
   if (rotate) {
     for (const [ws, c] of room.clients) {
+      if (!NEXT_ROLE[c.role]) continue; // the inspector keeps watching
       c.leaving = Date.now();
       sendText(ws, JSON.stringify({ t: 'rotate', role: NEXT_ROLE[c.role] }));
     }
@@ -268,6 +277,16 @@ function handle(req, res) {
     res.end(JSON.stringify({ httpPort: PORT, httpsPort: tlsUp ? HTTPS_PORT : null, lan: lanAddresses(), debug: DEBUG }));
     return;
   }
+  // the lobby asks which seats are taken (so a fourth person is offered the inspector seat)
+  if ((req.url || '').split('?')[0] === '/room.json') {
+    const code = new URL(req.url, 'http://x').searchParams.get('room') || 'A';
+    const key = String(code).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'A';
+    const r = rooms.get(key);
+    const roles = r ? [...r.clients.values()].map((c) => c.role) : [];
+    res.writeHead(200, { 'content-type': MIME['.json'], 'cache-control': 'no-cache' });
+    res.end(JSON.stringify({ room: key, taken: roles.filter((x) => PLAYER_ROLES.includes(x)), inspector: roles.includes('inspector') }));
+    return;
+  }
   serveStatic(req, res);
 }
 const server = http.createServer(handle);
@@ -368,7 +387,12 @@ function onUpgrade(req, sock) {
       case 'join': {
         if (room) return; // one socket, one seat
         const target = getRoom(m.room);
-        const wanted = ['runner', 'operator', 'bridge'].includes(m.role) ? m.role : 'runner';
+        const wanted = [...PLAYER_ROLES, 'inspector'].includes(m.role) ? m.role : 'runner';
+        // one inspector per room: a fourth person who watches any of the three screens
+        if (wanted === 'inspector' && [...target.clients.values()].some((c) => c.role === 'inspector')) {
+          sendText(sock, JSON.stringify({ t: 'error', code: 'inspector_taken', role: wanted, players: playersOf(target) }));
+          return;
+        }
         for (const [ws2, c] of target.clients) {
           if (c.role === wanted && c.leaving && Date.now() - c.leaving < 15_000) {
             target.clients.delete(ws2); // a rotating player's old seat: theirs is already reloading
@@ -387,7 +411,7 @@ function onUpgrade(req, sock) {
         sendText(sock, JSON.stringify({ t: 'welcome', id, room: room.code, role, debug: DEBUG, players: playersOf(room), history: room.history, tick: TICK, snapshot: snapshotOf(room.state) }, round3));
         broadcast(room, playersMessage(room));
         sendText(sock, JSON.stringify(votesMessage(room)));
-        console.log(`[room ${room.code}] ${role} joined (${room.clients.size}/3)`);
+        console.log(`[room ${room.code}] ${role} joined (${playerCount(room)}/3${role === 'inspector' ? ' + inspector' : ''})`);
         return;
       }
       case 'input': {
@@ -409,17 +433,8 @@ function onUpgrade(req, sock) {
       }
       case 'restart': {
         if (!room) return;
+        if (!PLAYER_ROLES.includes(role)) return; // the inspector has no vote
         vote(room, role, m.on !== false);
-        return;
-      }
-      case 'say': {
-        if (!room || role !== 'runner') return; // the Operator is mute; the Bridge is deaf
-        const text = String(m.text || '').slice(0, 140);
-        if (!text) return;
-        const who = room.clients.get(sock)?.name || 'runner';
-        for (const [ws2, c] of room.clients) {
-          if (c.role === 'operator') sendText(ws2, JSON.stringify({ t: 'say', from: who, text }));
-        }
         return;
       }
       case 'rtc': {
@@ -571,7 +586,7 @@ setInterval(() => {
     if (room.state.won && !room.logged) {
       room.logged = true;
       const roles = {};
-      for (const c of room.clients.values()) roles[c.role] = c.name;
+      for (const c of room.clients.values()) if (PLAYER_ROLES.includes(c.role)) roles[c.role] = c.name;
       room.history.push({ n: room.history.length + 1, time: Math.round(room.state.wonTime * 10) / 10, deaths: room.state.deaths, roles });
       if (room.history.length > 12) room.history.shift();
       broadcast(room, { t: 'history', runs: room.history });

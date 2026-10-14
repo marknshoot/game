@@ -131,9 +131,9 @@ check('the Bridge holds SPACE: his light comes on for both listeners', lit.bLive
 check('...and his voice reaches the Runner and the Operator', loudR > 1e-3 && loudO > 1e-3, `runner ${loudR.toExponential(1)}, operator ${loudO.toExponential(1)}`);
 const jitter = (await energyIn(R, 'bridge')).jitterMs;
 check('voice delay on the LAN is low (jitter buffer < 150 ms)', jitter > 0 && jitter < 150, `${jitter} ms (+ ~20 ms Opus frame, + network)`);
-// the Bridge's SPACE is push-to-talk only: it must not have spoken a phrase or held the key
-const bs = await B.ev('({phrases: __relay3d.state.phrases.length, key: __relay3d.state.key.held})');
-check("the Bridge's SPACE is only push-to-talk (no phrase, no key)", bs.phrases === 0 && bs.key === false, JSON.stringify(bs));
+// the Bridge's SPACE is push-to-talk only: it must not have held the key or chalked
+const bs = await B.ev('({chalk: __relay3d.state.chalk.length, key: __relay3d.state.key.held})');
+check("the Bridge's SPACE is only push-to-talk (no key, no chalk)", bs.chalk === 0 && bs.key === false, JSON.stringify(bs));
 await sleep(900); // let the jitter buffer drain the last of the beep
 const after = await energyOver(R, 'bridge', 1500);
 check('releasing SPACE silences him again', after < 1e-4 && (await vs(R)).talking.bridge === false, after.toExponential(1));

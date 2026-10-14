@@ -34,6 +34,8 @@ function client(room, role) {
     if (m.t === 'welcome') {
       c.snap = m.snapshot;
       c.debug = m.debug;
+      c.welcomed = true;
+      c.welcomeRole = m.role;
     }
     if (m.t === 'votes') c.votes = m;
     if (m.t === 'reset') {
@@ -69,24 +71,24 @@ console.log('=== RELAY 3D — Phase 0: integrity over the wire ===\n');
 {
   const { runner } = await team('SOLO', ['runner']);
   check('server reports debug mode off', runner.debug === false);
-  // a Runner alone sends every lever, the autopilot, the key and a phrase
-  for (const type of ['auto', 'span.throw', 'lift.toggle', 'exit.lever', 'phrase', 'chalk', 'stamp', 'knock']) {
+  // a Runner alone sends every lever, the autopilot, the key, chalk and a stamp
+  for (const type of ['auto', 'span.throw', 'lift.toggle', 'exit.lever', 'chalk', 'stamp', 'knock']) {
     runner.ev({ type, on: true, text: 'GO', x: 0, y: 0, z: 10, icon: '▲' });
   }
   runner.ev({ type: 'key', down: true });
   await sleep(500);
   const s = runner.snap;
   check(
-    'a Runner alone cannot pull any lever, speak, chalk, stamp, knock or hold the key',
-    s.span.phase === 'out' && !s.lift.moving && s.lift.y < -0.3 && !s.exit.armed && !s.key.held && s.phrases.length === 0 && s.chalk.length === 0 && s.stamps.length === 0 && s.knocks === 3,
-    `span=${s.span.phase} lift=${s.lift.y} armed=${s.exit.armed} key=${s.key.held} phrases=${s.phrases.length} chalk=${s.chalk.length} knocks=${s.knocks}`,
+    'a Runner alone cannot pull any lever, chalk, stamp, knock or hold the key',
+    s.span.phase === 'out' && !s.lift.moving && s.lift.y < -0.3 && !s.exit.armed && !s.key.held && s.chalk.length === 0 && s.stamps.length === 0 && s.knocks === 3,
+    `span=${s.span.phase} lift=${s.lift.y} armed=${s.exit.armed} key=${s.key.held} chalk=${s.chalk.length} knocks=${s.knocks}`,
   );
   check('the autopilot is refused without --debug', s.runner.auto === false && s.runner.z < 2.1, `auto=${s.runner.auto} z=${s.runner.z}`);
   runner.close();
 }
 {
   const { runner, operator, bridge } = await team('ROLE');
-  operator.ev({ type: 'phrase', text: 'GO GO GO' });
+  operator.ev({ type: 'phrase', text: 'GO GO GO' }); // text chat is gone: talking is voice only
   operator.ev({ type: 'chalk', x: 0, y: 0, z: 10 });
   operator.ev({ type: 'key', down: true });
   bridge.ev({ type: 'span.throw' });
@@ -96,24 +98,24 @@ console.log('=== RELAY 3D — Phase 0: integrity over the wire ===\n');
   bridge.ev({ type: 'stamp', icon: '▲', x: 0, z: 9 });
   operator.say('i can talk');
   bridge.say('i can hear');
+  runner.say('typed chat');
   await sleep(500);
   const s = runner.snap;
-  check('the mute Operator cannot speak a phrase', s.phrases.length === 0);
+  check('there is no text chat: no phrases in the state, every "say" goes nowhere', !('phrases' in s) && !('phraseCd' in s));
   check("the Operator cannot chalk or hold the Bridge's key", s.chalk.length === 0 && !s.key.held);
   check("the Bridge cannot pull the Operator's levers, knock or stamp", s.span.phase === 'out' && !s.lift.moving && !s.exit.armed && s.knocks === 3 && s.stamps.length === 0);
-  check('only the Runner may shout (Operator/Bridge "say" goes nowhere)', operator.says.length === 0 && runner.says.length === 0 && bridge.says.length === 0);
+  check('...not even the Runner\'s typed shout reaches anyone', operator.says.length === 0 && runner.says.length === 0 && bridge.says.length === 0);
 
   // ...and each role's own powers still work
   operator.ev({ type: 'span.throw' });
-  bridge.ev({ type: 'phrase', text: 'THROW' });
   bridge.ev({ type: 'chalk', x: 0, y: 0, z: 12, dir: 'forward' });
-  runner.say('on the lift');
+  operator.ev({ type: 'stamp', icon: '✓', x: 0, z: 33 });
   await sleep(400);
   const s2 = runner.snap;
   check(
     'each role keeps its own powers',
-    s2.span.phase !== 'out' && s2.phrases.at(-1)?.text === 'THROW' && s2.chalk.length === 1 && operator.says.includes('on the lift') && bridge.says.length === 0,
-    `span=${s2.span.phase} phrase=${s2.phrases.at(-1)?.text} chalk=${s2.chalk.length} opSays=${operator.says.length}`,
+    s2.span.phase !== 'out' && s2.chalk.length === 1 && s2.stamps.length === 1,
+    `span=${s2.span.phase} chalk=${s2.chalk.length} stamps=${s2.stamps.length}`,
   );
 
   // untrusted payloads must not poison the sim
@@ -132,6 +134,38 @@ console.log('=== RELAY 3D — Phase 0: integrity over the wire ===\n');
   check('a Bridge that disconnects lets go of the key', held === true && runner.snap.key.held === false);
   runner.close();
   operator.close();
+}
+
+// ------------------------------------------------------------------ inspector
+{
+  // a full room takes one inspector: he gets the snapshots and can do nothing with them
+  const code = room('INSP');
+  const runner = client(code, 'runner'), operator = client(code, 'operator'), bridge = client(code, 'bridge');
+  await Promise.all([runner.ready, operator.ready, bridge.ready]);
+  const insp = client(code, 'inspector');
+  await insp.ready;
+  await until(() => insp.snap && insp.welcomed);
+  check('a full room still seats an inspector, who gets the live state', !!insp.snap && !insp.err && insp.welcomeRole === 'inspector', JSON.stringify(insp.err));
+  const second = client(code, 'inspector');
+  await second.ready;
+  await until(() => second.err, 2000);
+  check('...but only one inspector per room', second.err?.code === 'inspector_taken', JSON.stringify(second.err));
+  second.close();
+  for (const type of ['span.throw', 'press', 'lift.toggle', 'exit.lever', 'knock', 'stamp', 'chalk', 'auto', 'reset']) insp.ev({ type, down: true, on: true, x: 0, y: 0, z: 10, icon: '▲' });
+  insp.ev({ type: 'key', down: true });
+  insp.input({ f: 1, s: 1 });
+  insp.vote(true);
+  await sleep(500);
+  const s = operator.snap;
+  check(
+    'the inspector cannot pull a lever, chalk, stamp, knock, hold the key, move the Runner or vote',
+    s.span.phase === 'out' && !s.lift.moving && !s.exit.armed && !s.key.held && s.press.phase === 'down' && s.knocks === 3 && !s.chalk.length && !s.stamps.length && Math.abs(s.runner.x) < 0.01 && !s.runner.committed && (operator.votes?.roles?.length ?? 0) === 0,
+    `span=${s.span.phase} press=${s.press.phase} x=${s.runner.x} votes=${JSON.stringify(operator.votes?.roles)}`,
+  );
+  check('the inspector does not count towards the restart vote (2 of the 3 players)', operator.votes?.need === 2 || operator.votes == null);
+  const seats = await fetch(WS.replace('ws://', 'http://').replace('/ws', `/room.json?room=${code}`)).then((r) => r.json());
+  check('the lobby can see the room is full and the inspector seat taken', seats.taken.length === 3 && seats.inspector === true, JSON.stringify(seats));
+  for (const c of [runner, operator, bridge, insp]) c.close();
 }
 
 // -------------------------------------------------------------- restart vote
@@ -217,7 +251,6 @@ console.log('=== RELAY 3D — Phase 0: integrity over the wire ===\n');
     operator.ev({ type: 'stamp', icon: '▲', x: 0, z: i });
     operator.ev({ type: 'lift.toggle' });
     operator.ev({ type: 'span.throw' });
-    bridge.ev({ type: 'phrase', text: 'JUMP NOW' });
     bridge.ev({ type: 'chalk', x: 0, y: 0, z: i });
     await sleep(40);
   }

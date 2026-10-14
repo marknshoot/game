@@ -123,6 +123,43 @@ check(
 const peers = await runner.ev('window.__relay3d.peers.map(p=>p.role).sort().join(",")');
 check('all three roles are present in the room', peers === 'bridge,operator,runner', peers);
 
+// --- a fourth person: the room is full, so he takes the inspector seat
+const inspTab = await connect(await newTab(`${BASE}/play.html?role=runner&room=${ROOM}&name=watcher`));
+let refused = '';
+for (let i = 0; i < 40 && !refused; i++, await sleep(150)) refused = await inspTab.ev(`document.querySelector('.takeover a.btn')?.textContent || ''`).catch(() => '');
+check('a fourth player in a full room is offered the inspector seat', /INSPECT/.test(refused), refused);
+await inspTab.ev(`document.querySelector('.takeover a.btn').click()`);
+let insp0 = null;
+for (let i = 0; i < 40; i++, await sleep(200)) {
+  insp0 = await inspTab.ev(`window.__relay3d && window.__relay3d.state.t > 0 ? ({ role: window.__relay3d.ROLE, insp: window.__relay3d.INSPECT, bar: !!document.querySelector('.inspectbar'), again: !!document.querySelector('#again') }) : null`, 3000).catch(() => null);
+  if (insp0) break;
+}
+if (!insp0) console.log('      inspector tab:', await inspTab.ev('location.href + " | " + document.body.innerText.slice(0, 160)', 3000).catch((e) => String(e)), JSON.stringify(inspTab.errors));
+check('the inspector watches the Runner screen, with a role switcher and no RUN AGAIN', insp0 && insp0.insp && insp0.role === 'runner' && insp0.bar && !insp0.again, JSON.stringify(insp0));
+const seenBy = await runner.ev(`window.__relay3d.peers.map((p) => p.role).sort().join()`);
+check('the players see the inspector in the room', seenBy === 'bridge,inspector,operator,runner', seenBy);
+await focus(inspTab);
+const inspView = {};
+for (const [k, want] of [['Digit2', 'operator'], ['Digit3', 'bridge'], ['Digit1', 'runner'], ['Digit2', 'operator']]) {
+  await press(inspTab, k);
+  await sleep(300);
+  inspView[want] = await inspTab.ev(`({ role: window.__relay3d.ROLE, side: !!document.querySelector('aside.side'), cls: document.querySelector('#app').className, board: !!document.querySelector('.board-region') })`);
+}
+check(
+  'keys 1 / 2 / 3 switch the inspected screen in place (Operator, Bridge, Runner)',
+  inspView.operator.role === 'operator' && inspView.operator.side && /inspecting/.test(inspView.operator.cls) && inspView.bridge.role === 'bridge' && inspView.runner.role === 'runner' && !inspView.runner.side,
+  JSON.stringify(inspView),
+);
+// he sees the Operator's screen, buttons and all, but nothing he presses or clicks acts
+const leverBtn = await inspTab.ev(`(() => { const r = document.querySelector('.side .btn.big').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+for (const type of ['mousePressed', 'mouseReleased']) await inspTab.send('Input.dispatchMouseEvent', { type, x: leverBtn.x, y: leverBtn.y, button: 'left', clickCount: 1 });
+await press(inspTab, 'KeyB');
+await press(inspTab, 'KeyN');
+await inspTab.ev(`window.__relay3d.ev({ type: 'span.throw' })`); // even the raw event
+await sleep(600);
+const afterInsp = await operator.ev(`({ span: window.__relay3d.state.span.phase, knocks: window.__relay3d.state.knocks, need: window.__relay3d.votes.need })`);
+check('the inspector cannot throw the span or knock (buttons, keys, raw events)', afterInsp.span === 'out' && afterInsp.knocks === 3, JSON.stringify(afterInsp));
+
 // --- strafe direction: at yaw 0 the camera looks down +Z, so screen-right is -X.
 //     'D' (s=1) must move the Runner to -X, 'A' (s=-1) back to +X. The Runner tab's
 //     render loop is throttled in headless, so drive the authoritative input directly
@@ -171,59 +208,50 @@ const liftY = await runner.ev('window.__relay3d.state.lift.y');
 const liftMoving = await runner.ev('window.__relay3d.state.lift.moving');
 check("Operator's lift is authoritative too", liftMoving === true || liftY > -0.34, `y=${liftY}`);
 
-// --- Bridge words -> runner ear + operator ear, and NOT to the bridge's own logic
-await focus(bridge);
-await press(bridge, 'Digit3');
-// the rate limit is server state (phraseCd), mirrored by the buttons' 'cool' class;
-// sample it while the 1.2 s window is still up
-let bCool = false;
-for (let i = 0; i < 20 && !bCool; i++) {
-  await sleep(40);
-  bCool = await bridge.ev(`window.__relay3d.state.phraseCd > 0 && window.__relay3d.state.phrases.length > 0`);
-}
-const before = await bridge.ev('window.__relay3d.state.phrases.length');
-await press(bridge, 'Digit1'); // a second word inside the window must be dropped
-await sleep(300);
-const after = await bridge.ev('window.__relay3d.state.phrases.length');
-bCool = bCool && after === before;
-// the phrase is on screen for ~2.5-3 s; a backgrounded tab only repaints while in
-// front, so alternate between the two listeners until both have shown it
-let rEar = '';
-let oVoice = '';
-for (let i = 0; i < 24 && !(rEar.includes('JUMP NOW') && oVoice.includes('JUMP NOW')); i++) {
-  // headless tabs paint at ~2 fps: if a 2.5 s word was missed, say it again (rate limit permitting)
-  if (i % 6 === 5) {
-    await focus(bridge);
-    await sleep(1300);
-    await press(bridge, 'Digit3');
-  }
-  if (!rEar.includes('JUMP NOW')) {
-    await focus(runner);
-    for (let j = 0; j < 6 && !rEar.includes('JUMP NOW'); j++, await sleep(60)) rEar = await runner.ev(`document.querySelector('.ear')?.textContent || ''`);
-  }
-  if (!oVoice.includes('JUMP NOW')) {
-    await focus(operator);
-    for (let j = 0; j < 6 && !oVoice.includes('JUMP NOW'); j++, await sleep(60)) oVoice = await operator.ev(`document.querySelector('.voice')?.textContent || ''`);
-  }
-}
-check("Bridge's word reaches the Runner's ear", rEar.includes('JUMP NOW'), `ear="${rEar}"`);
-check("Bridge's word reaches the Operator's ear", oVoice.includes('JUMP NOW'), `voice="${oVoice}"`);
-check('the Bridge is rate-limited to one word at a time', bCool === true);
+// --- there is no text chat any more: talking is voice only
+const chatUi = {};
+for (const [role, t] of Object.entries(tabs)) chatUi[role] = await t.ev(`({ phr: document.querySelectorAll('.btn.phr').length, shout: !!document.querySelector('input.shout'), ear: !!document.querySelector('.ear'), say: 'say' in window.__relay3d, phrases: 'phrases' in window.__relay3d.state })`);
+check('no phrase buttons, no typed shout, no phrase state on any screen', Object.values(chatUi).every((u) => !u.phr && !u.shout && !u.ear && !u.say && !u.phrases), JSON.stringify(chatUi));
 
-// --- Operator stamp -> bridge board only
+// --- a REAL mouse click (CDP input, so it lands on whatever is on top of the canvas)
+async function clickWorld(t, view, x, y, z) {
+  const pt = await t.ev(`(() => { const w = window.__relay3d.world;
+    const cam = ${view === 'board' ? `window.__relay3d.ROLE === 'bridge' ? w.bridgeBoardCam : w.operatorCam` : 'w.runnerCam'};
+    const r = document.querySelector('.${view === 'board' ? 'board' : 'cam'}-region').getBoundingClientRect();
+    const v = w.project(cam, ${x}, ${y}, ${z});
+    return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height }; })()`);
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await t.send('Input.dispatchMouseEvent', { type, x: pt.x, y: pt.y, button: 'left', clickCount: 1 });
+  return pt;
+}
+
+// --- Operator stamp (clicked on his board) -> the Bridge's board
 await focus(operator);
-await focus(operator);
-await operator.ev(`(() => {
-  const cv = document.querySelector('#view');
-  const r = document.querySelector('.board-region').getBoundingClientRect();
-  cv.dispatchEvent(new MouseEvent('click', { bubbles:true, clientX: r.left + r.width*0.72, clientY: r.top + r.height*0.45 }));
-  return true;
-})()`);
-await sleep(600);
+await sleep(500); // a frame with the board camera's final matrices
+await operator.ev(`document.querySelectorAll('.btn.stamp')[2].click()`); // ✓
+await clickWorld(operator, 'board', 0, 0, 39);
+let stamp = null;
+for (let i = 0; i < 20 && !stamp; i++, await sleep(100)) stamp = await bridge.ev('window.__relay3d.state.stamps.at(-1) || null');
+check("a mouse click on the Operator's board stamps that spot (✓ near z39)", stamp && stamp.icon === '✓' && Math.abs(stamp.z - 39) < 2 && Math.abs(stamp.x) < 1.2, JSON.stringify(stamp));
 await focus(bridge);
-const boardFeed = await bridge.ev(`[...document.querySelectorAll('.feed')].map(e=>e.textContent).join(' | ')`);
-const stamps = await bridge.ev('window.__relay3d.state.stamps.length');
-check("Operator's stamp reaches the Bridge's board", stamps >= 1, `stamps=${stamps} feed="${boardFeed.slice(0, 90)}"`);
+let boardFeed = '';
+for (let i = 0; i < 40 && !boardFeed.includes('✓'); i++, await sleep(150)) boardFeed = await bridge.ev(`[...document.querySelectorAll('.feed')].map(e=>e.textContent).join(' | ')`);
+check("Operator's stamp reaches the Bridge's board", boardFeed.includes('✓'), `feed="${boardFeed.slice(0, 90)}"`);
+// a click on a sidebar button must not also stamp the board under it
+const nStamps = await operator.ev('window.__relay3d.state.stamps.length');
+await focus(operator);
+const btn = await operator.ev(`(() => { const r = document.querySelector('.btn.stamp').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+for (const type of ['mousePressed', 'mouseReleased']) await operator.send('Input.dispatchMouseEvent', { type, x: btn.x, y: btn.y, button: 'left', clickCount: 1 });
+await sleep(400);
+check('clicking a HUD button does not drop a stamp', (await operator.ev('window.__relay3d.state.stamps.length')) === nStamps);
+
+// --- Bridge chalk by a real click on his copy of the board
+await focus(bridge);
+await sleep(500);
+const chalkBefore = await bridge.ev('window.__relay3d.state.chalk.length');
+await clickWorld(bridge, 'board', 0, 0, 45);
+let chalkMark = null;
+for (let i = 0; i < 20 && !chalkMark; i++, await sleep(100)) chalkMark = (await bridge.ev('window.__relay3d.state.chalk.length')) > chalkBefore ? await bridge.ev('window.__relay3d.state.chalk.at(-1)') : null;
+check("a mouse click on the Bridge's board places chalk there (near z45)", chalkMark && Math.abs(chalkMark.z - 45) < 2.5, JSON.stringify(chalkMark));
 
 // --- audio channel: Runner + Operator hear the gantry, the Bridge is hard-muted
 const audioFlags = await runner.ev('({on: window.__relay3d.audioEnabled, update: typeof window.__relay3d.audio.update === "function"})');
@@ -258,17 +286,6 @@ for (let i = 0; i < 240 && bridgeShake <= 0; i++) {
 }
 const bridgeFlash = await bridge.ev('document.querySelector(".callnow")?.classList.contains("knock") === true');
 check('the deaf Bridge sees the same knock shake, with no UI flash', bridgeShake > 0 && bridgeFlash === false, `shake=${bridgeShake} flash=${bridgeFlash}`);
-
-// --- Runner's shout reaches the operator ONLY (the Bridge is deaf)
-await focus(runner);
-await runner.ev(`(() => { const i = document.querySelector('.shout'); i.value = 'the span is out, I can hear it'; i.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true})); return true; })()`);
-await sleep(600);
-await focus(operator);
-const opSays = await operator.ev(`document.querySelector('.shots').textContent.includes('span is out')`);
-await focus(bridge);
-const brSays = await bridge.ev(`document.body.innerText.includes('span is out')`);
-check("the Runner's voice reaches the Operator", opSays === true);
-check('the Runner\'s voice does NOT reach the deaf Bridge', brSays === false);
 
 // --- Bridge chalk -> runner visor, ink spent
 await focus(bridge);
@@ -428,13 +445,15 @@ for (const [was, t] of Object.entries(tabs)) {
 check('RUN AGAIN after a win rotates every player to the next role', nowRole.runner === 'operator' && nowRole.operator === 'bridge' && nowRole.bridge === 'runner', JSON.stringify(nowRole));
 let full = '';
 for (let i = 0; i < 40; i++) {
-  full = await tabs.runner.ev('(window.__relay3d?.peers || []).map((p) => p.role).sort().join()', 2000).catch(() => '');
+  full = await tabs.runner.ev('(window.__relay3d?.peers || []).map((p) => p.role).filter((r) => r !== "inspector").sort().join()', 2000).catch(() => '');
   if (full === 'bridge,operator,runner') break;
   await sleep(250);
 }
 check('...and all three seats are taken again in the same room', full === 'bridge,operator,runner', full);
 const runsLogged = await tabs.runner.ev('window.__relay3d.history.length', 5000).catch(() => 0);
 check('the finished run is in the room history shown to everyone', runsLogged >= 1, `runs=${runsLogged}`);
+const inspAfter = await inspTab.ev(`({ role: window.__relay3d.ROLE, insp: window.__relay3d.INSPECT })`, 5000).catch(() => null);
+check('the inspector is not rotated: he keeps watching the screen he chose', inspAfter && inspAfter.insp && inspAfter.role === 'operator', JSON.stringify(inspAfter));
 // from here on, the tabs hold their new roles
 tabs.runner = tabs.bridge;
 tabs.bridge = tabs.operator;
@@ -457,9 +476,15 @@ const allErrors = [
   ...runner.errors.map((e) => `runner: ${e}`),
   ...operator.errors.map((e) => `operator: ${e}`),
   ...bridge.errors.map((e) => `bridge: ${e}`),
+  ...inspTab.errors.map((e) => `inspector: ${e}`),
 ];
-check('no page errors on any of the three screens', allErrors.length === 0, allErrors.slice(0, 4).join(' | '));
+check('no page errors on any of the three screens (or the inspector\'s)', allErrors.length === 0, allErrors.slice(0, 4).join(' | '));
 
+await focus(inspTab);
+await sleep(500);
+writeFileSync(`${SHOTS}/3d-inspector.png`, Buffer.from((await inspTab.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+inspTab.close();
+await fetch(`${CDP}/json/close/${inspTab.id}`, { method: 'PUT' }).catch(() => {});
 for (const t of Object.values(tabs)) t.close();
 for (const t of Object.values(tabs)) await fetch(`${CDP}/json/close/${t.id}`, { method: 'PUT' }).catch(() => {});
 

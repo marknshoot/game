@@ -481,8 +481,6 @@ check('EXIT: the finale is a triumph more often than not (≥ 60% → ≥ 85%)',
   const busy = SIM.createState();
   for (let i = 0; i < 400; i++) {
     busy.t += 0.5;
-    busy.phraseCd = 0;
-    SIM.applyEvent(busy, { type: 'phrase', text: 'JUMP NOW' });
     SIM.applyEvent(busy, { type: 'stamp', icon: '▲', x: 0, z: 10 });
     if (i < 6) SIM.applyEvent(busy, { type: 'chalk', x: 1.234567, y: 0, z: 33.33333 });
   }

@@ -35,7 +35,7 @@
       <label>MIC <select id="mic-dev"><option value="">default microphone</option></select></label>
       <button id="mic-test" class="btn" type="button">Test mic</button>
       <span class="micmeter" aria-label="microphone level"><b id="mic-level"></b></span>
-      <label class="auto"><input id="mic-off" type="checkbox" /> no voice (phrase wheel only)</label>
+      <label class="auto"><input id="mic-off" type="checkbox" /> no mic (you will not be able to talk)</label>
     </div>
     <p id="mic-msg" class="muted" role="status"></p>
   </section>
@@ -60,6 +60,11 @@
       <p class="muted">Fuse two lossy pictures into words that arrive before he commits.</p>
     </a>
   </div>
+  <p class="inspectline">
+    <span id="seats" class="muted" role="status" aria-live="polite"></span>
+    <a id="inspect" class="btn" href="#">INSPECT this room</a>
+    <span class="muted">— a fourth seat: watch any of the three screens (1 / 2 / 3 to switch), no controls, no voice.</span>
+  </p>
 
   <h2>Play it on three laptops</h2>
   <ol>
@@ -86,9 +91,9 @@ at 6.6 m/s that is 6.6 metres of runway the Bridge has to spend before the world
   <h2>Controls</h2>
   <table>
     <tr><th>Screen</th><th>Keys</th><th>Mouse</th></tr>
-    <tr><td>Runner</td><td>W go (no stopping) · A/D steer · S brace · SPACE jump · arrows turn · Q sonar · ⏎ shout (reaches the Operator only)</td><td>click to look</td></tr>
+    <tr><td>Runner</td><td>W go (no stopping) · A/D steer · S brace · SPACE jump · arrows turn · Q sonar · hold SHIFT to talk (the Operator hears you)</td><td>click to look</td></tr>
     <tr><td>Operator</td><td>B span · hold H press up · F lift · E exit lever · N knock · 7/8/9 stamp</td><td>click the board to drop a stamp</td></tr>
-    <tr><td>Bridge</td><td>1-8 GO/WAIT/JUMP NOW/LEFT/RIGHT/BRACE/UP/ARM · T THROW · O ON ONE · K hold the 2nd key · C cycle chalk · V chalk ahead</td><td>click his cam to place chalk</td></tr>
+    <tr><td>Bridge</td><td>hold SPACE to talk (Runner + Operator hear you) · K hold the 2nd key · C cycle chalk · V chalk ahead</td><td>click his cam to place chalk</td></tr>
   </table>
   <p class="muted">Every screen: <kbd>R</kbd> or the <b>RUN AGAIN</b> button votes for a fresh run — two players' votes restart the room.</p>
 
@@ -116,6 +121,27 @@ at 6.6 m/s that is 6.6 metres of runway the Bridge has to spend before the world
     });
   }
   room.addEventListener('keydown', (e) => { if (e.key === 'Enter') go('runner'); });
+  document.getElementById('inspect').addEventListener('click', (e) => {
+    e.preventDefault();
+    const q = new URLSearchParams({ role: 'runner', room: room.value.trim() || 'A', inspect: '1' });
+    if (name.value.trim()) q.set('name', name.value.trim());
+    location.href = `play.html?${q}`;
+  });
+  // which seats are taken: a full room points the fourth person at the inspector seat
+  const seats = document.getElementById('seats');
+  async function pollSeats() {
+    const r = await fetch(`/room.json?room=${encodeURIComponent(room.value.trim() || 'A')}`).then((x) => x.json()).catch(() => null);
+    if (!r) return;
+    for (const card of document.querySelectorAll('.rolecard')) card.classList.toggle('taken', r.taken.includes(card.dataset.role));
+    const full = ['runner', 'operator', 'bridge'].every((x) => r.taken.includes(x));
+    seats.textContent = full ? (r.inspector ? `Room ${r.room} is full, inspector seat taken too.` : `Room ${r.room} is full.`) : r.taken.length ? `Room ${r.room}: ${r.taken.join(', ')} taken.` : '';
+    const ins = document.getElementById('inspect');
+    ins.classList.toggle('hot', full && !r.inspector);
+    ins.toggleAttribute('aria-disabled', !!r.inspector);
+  }
+  pollSeats();
+  setInterval(pollSeats, 2000);
+  room.addEventListener('input', pollSeats);
 </script>
 <script type="module">
   import { readMicPref, writeMicPref } from './js/voice.js';

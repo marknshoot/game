@@ -10,7 +10,13 @@ import { createAudio } from './audio.js';
 import { createVoice } from './voice.js';
 
 const P = new URLSearchParams(location.search);
-const ROLE = ['runner', 'operator', 'bridge'].includes(P.get('role')) ? P.get('role') : 'runner';
+const ROLES = ['runner', 'operator', 'bridge'];
+// ?inspect=1: the inspector seat (one per room). He watches any of the three screens, switches
+// between them with 1 / 2 / 3, and can do nothing: no levers, no chalk, no voice, no vote.
+const INSPECT = P.get('inspect') === '1';
+let ROLE = ROLES.includes(P.get('role')) ? P.get('role') : 'runner';
+// only a real Runner predicts his own body; everyone else (the inspector too) shows the server's
+const predicting = () => ROLE === 'runner' && !INSPECT;
 const ROOM = (P.get('room') || 'A').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'A';
 // demo/automation helpers (autopilot) only exist with ?debug=1; the server also refuses
 // them unless it was started with --debug
@@ -21,10 +27,9 @@ const NAME = P.get('name') || '';
 const ASSIST = P.get('assist') === '1';
 
 // The Bridge is deaf by rule: createAudio('bridge') is a hard-muted no-op.
-const audio = createAudio(ROLE);
+// (the inspector watches with the sound off: he is not part of the team's ears)
+const audio = createAudio(INSPECT ? 'bridge' : ROLE);
 
-const PHRASES = ['GO', 'WAIT', 'JUMP NOW', 'LEFT', 'RIGHT', 'BRACE', 'UP', 'ARM', 'THROW', 'ON ONE'];
-const PHRASE_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', 'T', 'O'];
 const CHALK_DIRS = ['forward', 'left', 'right', 'down'];
 const SONAR_CD = 3.5;
 
@@ -59,17 +64,17 @@ const world = createWorld(canvas);
 
 const net = createNet({
   room: ROOM,
-  role: ROLE,
+  role: INSPECT ? 'inspector' : ROLE,
   name: NAME,
   onWelcome: (m) => {
     remote = m.snapshot;
-    if (ROLE === 'runner') Object.assign(local, m.snapshot);
+    if (predicting()) Object.assign(local, m.snapshot);
     voice?.setPlayers(m.players);
     history = m.history || [];
     status = 'playing';
   },
   onSnapshot: (s) => {
-    if (ROLE === 'runner') predict.adopt(s);
+    if (predicting()) predict.adopt(s);
     else remote = s;
   },
   onPlayers: (p) => {
@@ -78,16 +83,18 @@ const net = createNet({
     voice?.setPlayers(p);
   },
   onError: (m) => {
-    if (m.code === 'role_taken') {
-      document.body.innerHTML = `<div class="takeover"><h1>${m.role} is already taken in room ${ROOM}</h1>
-      <p>${m.players.map((p) => `${p.role}: ${p.name}`).join(' · ') || ''}</p>
+    if (m.code === 'role_taken' || m.code === 'inspector_taken') {
+      net.close();
+      const players = m.players || [];
+      const full = ROLES.every((r) => players.some((p) => p.role === r));
+      const canInspect = !players.some((p) => p.role === 'inspector');
+      const q = new URLSearchParams(location.search);
+      q.set('inspect', '1');
+      const what = m.code === 'inspector_taken' ? 'the inspector seat' : esc(m.role);
+      document.body.innerHTML = `<div class="takeover"><h1>${what} is already taken in room ${esc(ROOM)}</h1>
+      <p>${players.map((p) => `${esc(p.role)}: ${esc(p.name)}`).join(' · ')}</p>
+      ${canInspect ? `<p><a class="btn big" href="play.html?${q}">${full ? 'The room is full — ' : ''}INSPECT this room instead</a></p>` : ''}
       <p><a href="index.html">back to the lobby</a></p></div>`;
-    }
-  },
-  onSay: (m) => {
-    if (ROLE === 'operator') {
-      pushVoiceShot(m.from, m.text);
-      audio.say(m.text, 'runner'); // the Runner's shout reaches the Operator's ears
     }
   },
   onVotes: (m) => {
@@ -125,10 +132,10 @@ net.on('rotate', (m) => {
 // ------------------------------------------------------------------- voice
 // Runner: hold SHIFT to talk to the Operator. Bridge: hold SPACE to talk to both.
 // M toggles an open mic. The Operator has no mic; the Bridge hears nothing.
-const PTT_KEYS = ROLE === 'runner' ? ['ShiftLeft', 'ShiftRight'] : ROLE === 'bridge' ? ['Space'] : [];
+const PTT_KEYS = INSPECT ? [] : ROLE === 'runner' ? ['ShiftLeft', 'ShiftRight'] : ROLE === 'bridge' ? ['Space'] : [];
 const PTT_LABEL = ROLE === 'runner' ? 'SHIFT' : 'SPACE';
 const voice = createVoice({ role: ROLE, net, onChange: () => renderVoice() });
-voice.start();
+if (!INSPECT) voice.start();
 
 // ---------------------------------------------------- prediction for the Runner
 const predict = {
@@ -197,11 +204,8 @@ function bindInput() {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) releaseAll();
   });
-  canvas.addEventListener('click', (e) => {
-    if (ROLE === 'runner') canvas.requestPointerLock?.();
-  });
   addEventListener('mousemove', (e) => {
-    if (ROLE !== 'runner') return;
+    if (ROLE !== 'runner' || INSPECT) return;
     if (document.pointerLockElement !== canvas) return;
     // mouse right turns the view right (-X); he runs down the gantry, so the look is clamped
     input.yaw = Math.max(-1.1, Math.min(1.1, input.yaw - e.movementX * 0.0022));
@@ -211,6 +215,7 @@ function bindInput() {
 
 function releaseAll() {
   keys.clear();
+  if (INSPECT) return;
   input.f = 0;
   input.s = 0;
   input.jump = false;
@@ -221,6 +226,11 @@ function releaseAll() {
 }
 
 function onKeyDown(code) {
+  if (INSPECT) {
+    const i = ['Digit1', 'Digit2', 'Digit3'].indexOf(code);
+    if (i >= 0) inspect(ROLES[i]);
+    return;
+  }
   if (code === 'KeyR') {
     toggleVote();
     return;
@@ -250,10 +260,6 @@ function onKeyDown(code) {
     if (code === 'Digit9') selectStamp(2);
   }
   if (ROLE === 'bridge') {
-    const i = code.startsWith('Digit') ? '12345678'.indexOf(code.slice(5)) : -1;
-    if (i >= 0) sendPhrase(PHRASES[i]);
-    if (code === 'KeyT') sendPhrase('THROW');
-    if (code === 'KeyO') sendPhrase('ON ONE');
     if (code === 'KeyK') net.sendEvent({ type: 'key', down: true });
     if (code === 'KeyC') {
       chalkDir = CHALK_DIRS[(CHALK_DIRS.indexOf(chalkDir) + 1) % CHALK_DIRS.length];
@@ -265,10 +271,6 @@ function onKeyDown(code) {
 
 function knock() {
   net.sendEvent({ type: 'knock' });
-}
-function sendPhrase(text) {
-  net.sendEvent({ type: 'phrase', text });
-  updatePhraseCd();
 }
 function fireSonar() {
   if (ROLE !== 'runner' || sonarCd > 0 || local.dead || local.won) return;
@@ -293,7 +295,9 @@ function quickChalk() {
 // ------------------------------------------------------------------ HUD build
 function build() {
   const app = document.querySelector('#app');
-  app.className = `role-${ROLE}`;
+  app.replaceChildren(); // the inspector rebuilds the HUD when he switches screens
+  hud = {};
+  app.className = `role-${ROLE}${INSPECT ? ' inspecting' : ''}`;
   const stage = h('div', { class: 'stage' }, canvas);
   const camRegion = h('div', { class: 'region cam-region', dataset: { view: 'cam' } });
   const boardRegion = h('div', { class: 'region board-region', dataset: { view: 'board' } });
@@ -308,13 +312,19 @@ function build() {
       { class: 'chrome' },
       h('span', { id: 'netstat', class: 'netstat' }, 'connecting…'),
       h('span', { class: 'peers', id: 'peers' }),
-      h('button', { class: 'again', id: 'again', onclick: () => toggleVote() }, 'RUN AGAIN', kbd('R')),
+      INSPECT
+        ? h(
+            'span',
+            { class: 'inspectbar', role: 'group', 'aria-label': 'inspect a screen' },
+            h('b', {}, 'INSPECTING'),
+            ...ROLES.map((r, i) => h('button', { class: `insp ${r === ROLE ? 'on' : ''}`, 'aria-pressed': String(r === ROLE), onclick: () => inspect(r) }, r.toUpperCase(), kbd(String(i + 1)))),
+          )
+        : h('button', { class: 'again', id: 'again', onclick: () => toggleVote() }, 'RUN AGAIN', kbd('R')),
       h('a', { class: 'lobby', href: 'index.html' }, 'lobby'),
     ),
   );
 
   if (ROLE === 'runner') {
-    const ear = h('div', { class: 'ear' });
     const feel = h('div', { class: 'feel' });
     const coach = h('div', { class: 'coach' });
     const banner = h('div', { class: 'banner' });
@@ -325,37 +335,23 @@ function build() {
     const vigDeath = h('div', { class: 'vignette vignette-death' });
     const vigWin = h('div', { class: 'vignette vignette-win' });
     const sonarEl = h('div', { class: 'sonar ready' }, '[Q] SONAR');
-    const shoutInput = h('input', { class: 'shout', placeholder: 'shout (only the Operator hears you)  ⏎' });
-    shoutInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && shoutInput.value.trim()) {
-        net.say(shoutInput.value.trim());
-        pushVoiceShot('you', shoutInput.value.trim(), true);
-        shoutInput.value = '';
-      }
-      e.stopPropagation();
-    });
     camRegion.append(
       vigDeath,
       vigWin,
       h('div', { class: 'crosshair' }),
-      ear,
       feel,
       station,
       brace,
       banner,
       lock,
-      h('div', { class: 'shoutrow' }, shoutInput),
       coach,
       sonarEl,
     );
-    hud.runner = { ear, feel, coach, banner, lock, station, braceBar, sonar: sonarEl, vigDeath, vigWin, shout: pushVoiceShot, selfShots: h('div', { class: 'selfshots' }) };
-    camRegion.append(hud.runner.selfShots);
+    hud.runner = { feel, coach, banner, lock, station, braceBar, sonar: sonarEl, vigDeath, vigWin };
     setTimeout(() => lock.classList.add('fade'), 6000);
   }
 
   if (ROLE === 'operator') {
-    const voice = h('div', { class: 'voice' });
-    const shots = h('div', { class: 'shots' });
     const feed = h('div', { class: 'feed' });
     const coach = h('div', { class: 'coach' });
     boardRegion.append(h('div', { class: 'boardlabel' }, 'YOUR BOARD — states, timings, and the LIES in the hall (red: only you see them). No runner.'), coach);
@@ -376,16 +372,13 @@ function build() {
         ...['▲', '⧗', '✓'].map((ic, i) => h('button', { class: 'btn stamp', dataset: { i: String(i) }, onclick: () => selectStamp(i) }, ic)),
       ),
       h('p', { class: 'hint' }, 'then click your board: the Bridge sees your stamps on his copy, which does NOT show the red lies'),
-      h('h2', {}, 'VOICE — the Bridge (you hear them)'),
-      voice,
-      h('h2', {}, 'EAR — the Runner (you hear them; you cannot answer)'),
-      shots,
+      h('p', { class: 'hint' }, 'You are MUTE: you hear the Bridge and the Runner over voice, and answer with levers, stamps and knocks.'),
       h('h2', {}, 'SYSTEM'),
       feed,
       DEBUG ? h('label', { class: 'auto' }, h('input', { type: 'checkbox', onchange: (e) => net.sendEvent({ type: 'auto', on: e.target.checked }) }), ' autopilot (debug)') : null,
     );
     app.append(side);
-    hud.operator = { voice, shots, feed, coach, side };
+    hud.operator = { feed, coach, side };
   }
 
   if (ROLE === 'bridge') {
@@ -405,8 +398,6 @@ function build() {
       'HOLD 2nd KEY',
       kbd('K'),
     );
-    const phraseRow = h('div', { class: 'row' });
-    PHRASES.forEach((p, i) => phraseRow.append(h('button', { class: 'btn phr', onclick: () => sendPhrase(p) }, p, kbd(PHRASE_KEYS[i]))));
     const chalkRow = h('div', { class: 'row' });
     CHALK_DIRS.forEach((d) =>
       chalkRow.append(
@@ -432,8 +423,8 @@ function build() {
     const side = h(
       'aside',
       { class: 'side' },
-      h('h2', {}, 'SPEAK — one word at a time'),
-      phraseRow,
+      h('h2', {}, 'SPEAK'),
+      h('p', { class: 'hint' }, 'hold ', kbd('SPACE'), ' to talk — the Runner and the Operator hear you. ', kbd('M'), ' open mic.'),
       h('h2', {}, 'CHALK — 6 marks, on his visor'),
       chalkRow,
       h('p', { class: 'hint' }, 'click his cam or your board to place · ink ', ink, ' · ', kbd('C'), ' cycle · ', kbd('V'), ' ahead'),
@@ -446,20 +437,37 @@ function build() {
       DEBUG ? h('label', { class: 'auto' }, h('input', { type: 'checkbox', onchange: (e) => net.sendEvent({ type: 'auto', on: e.target.checked }) }), ' autopilot (debug)') : null,
     );
     app.append(side);
-    hud.bridge = { beat, earSide, coach, ink, keyBar, keyBtn, phraseRow, chalkRow, side, vigDeath, vigWin, feedEl: side.querySelector('.feed') };
+    hud.bridge = { beat, earSide, coach, ink, keyBar, keyBtn, chalkRow, side, vigDeath, vigWin, feedEl: side.querySelector('.feed') };
   }
 
   const score = h('div', { class: 'scoreboard', id: 'scoreboard', role: 'status', 'aria-live': 'polite' });
   stage.append(score);
-  canvas.addEventListener('click', onCanvasClick, true);
+  // the view regions sit on top of the canvas, so clicks are taken where they land: the stage
+  stage.addEventListener('click', onCanvasClick);
 }
+
+// the inspector switches screens in place (same socket, same seat)
+function inspect(role) {
+  if (!INSPECT || !ROLES.includes(role)) return;
+  ROLE = role;
+  clientGhost.length = 0;
+  build();
+  paintChalkButtons();
+  selectStamp(0);
+  renderPeers();
+  renderVoice();
+  const q = new URLSearchParams(location.search);
+  q.set('role', role);
+  history_replace(q);
+}
+const history_replace = (q) => window.history.replaceState(null, '', `play.html?${q}`);
 
 function renderScore(s) {
   const el = document.querySelector('#scoreboard');
   if (!el) return;
   el.classList.toggle('on', !!s.won);
   if (!s.won) return;
-  const three = peers.length === 3;
+  const three = ROLES.every((r) => peers.some((p) => p.role === r));
   const rows = history
     .slice(-6)
     .map((r) => `<tr><td>#${r.n}</td><td>${r.time.toFixed(1)} s</td><td>${r.deaths} fall${r.deaths === 1 ? '' : 's'}</td><td>R ${esc(r.roles.runner || '—')} · O ${esc(r.roles.operator || '—')} · B ${esc(r.roles.bridge || '—')}</td></tr>`)
@@ -478,12 +486,6 @@ function toast(msg) {
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.remove('on'), 2200);
 }
-function pushVoiceShot(from, text, self = false) {
-  const el = self ? document.querySelector('.selfshots') : document.querySelector('.shots');
-  if (!el) return;
-  el.append(h('div', { class: 'shot' }, h('b', {}, from + ':'), ' ' + text));
-  while (el.children.length > 4) el.removeChild(el.firstChild);
-}
 
 function renderPeers() {
   const el = document.querySelector('#peers');
@@ -492,9 +494,9 @@ function renderPeers() {
   el.innerHTML = want
     .map((r) => {
       const p = peers.find((x) => x.role === r);
-      return `<span class="${p ? 'on' : 'off'}">${r}${p ? ': ' + p.name : ''}</span>`;
+      return `<span class="${p ? 'on' : 'off'}">${r}${p ? ': ' + esc(p.name) : ''}</span>`;
     })
-    .join(' · ');
+    .join(' · ') + (peers.some((p) => p.role === 'inspector') ? ' · <span class="on inspchip">+ inspector</span>' : '');
 }
 // ------------------------------------------------------------ voice HUD
 const ROLE_NAME = { runner: 'RUNNER', operator: 'OPERATOR', bridge: 'BRIDGE' };
@@ -504,6 +506,10 @@ function renderVoice() {
   if (!el) return;
   const v = voice.state;
   const rows = [];
+  if (INSPECT) {
+    el.innerHTML = `<div><span class="vx dim">INSPECTOR — watching the ${ROLE_NAME[ROLE]}'s screen · no voice, no controls · 1 / 2 / 3 switch</span></div>`;
+    return;
+  }
   if (ROLE === 'operator') rows.push('<span class="vx dim">MUTE — no mic</span>');
   else {
     const to = v.speaks.map((r) => ROLE_NAME[r]).join(' + ');
@@ -519,7 +525,7 @@ function renderVoice() {
         : '<span class="vx warn">voice needs https (start the server with https on)</span>';
     } else if (v.mic === 'asking') mic = '<span class="vx dim">allow the microphone…</span>';
     else if (v.mic === 'denied') mic = '<span class="vx warn">mic blocked by the browser — allow it in the address bar</span>';
-    else if (v.mic === 'disabled') mic = '<span class="vx dim">mic off (lobby setting) — phrase wheel only</span>';
+    else if (v.mic === 'disabled') mic = '<span class="vx dim">mic off (lobby setting) — you cannot talk</span>';
     else if (v.mic === 'unavailable') mic = '<span class="vx warn">no microphone found</span>';
     rows.push(mic);
   }
@@ -534,7 +540,7 @@ function renderVoice() {
   el.innerHTML = rows.map((r) => `<div>${r}</div>`).join('');
 }
 async function pollVoiceLevel() {
-  if (voice.state.mic !== 'on') return;
+  if (INSPECT || voice.state.mic !== 'on') return;
   const st = await voice.stats();
   voiceLevel = Math.max(0, ...st.filter((x) => x.dir === 'out').map((x) => x.level));
   renderVoice();
@@ -562,12 +568,14 @@ function paintChalkButtons() {
   if (!hud.bridge) return;
   for (const b of hud.bridge.chalkRow.querySelectorAll('.btn.dir')) b.classList.toggle('on', b.dataset.dir === chalkDir);
 }
-function updatePhraseCd() {
-  if (!hud.bridge) return;
-  for (const b of hud.bridge.phraseRow.querySelectorAll('.btn')) b.classList.add('cool');
-}
 
 function onCanvasClick(e) {
+  if (INSPECT) return;
+  if (e.target.closest('button, a, input, select, label, .scoreboard.on')) return; // a HUD control, not the world
+  if (ROLE === 'runner') {
+    canvas.requestPointerLock?.();
+    return;
+  }
   const rect = canvas.getBoundingClientRect();
   const px = e.clientX - rect.left;
   const py = e.clientY - rect.top;
@@ -592,7 +600,7 @@ function camFor(view) {
   return ROLE === 'bridge' ? world.bridgeBoardCam : world.operatorCam;
 }
 function stateOf() {
-  return ROLE === 'runner' ? local : remote;
+  return predicting() ? local : remote;
 }
 function nextBeat(s) {
   const r = s.runner;
@@ -675,7 +683,6 @@ let showRunner = { x: 0, y: 0, z: 2, yaw: 0, vx: 0, vy: 0, vz: 0 };
 let stepAcc = 0.33;
 let sonarCd = 0;
 let shake = 0;
-let lastPhraseT = null;
 let lastKnockT = null;
 let lastDead = null;
 let lastWon = null;
@@ -688,14 +695,8 @@ function frame(now) {
   world.resize();
   sonarCd = Math.max(0, sonarCd - dt);
 
-  // one-shot edges: new phrase -> speech; new knock -> audio + camera shake.
+  // one-shot edges: new knock -> audio + camera shake.
   // The Bridge is deaf, so it only gets the visual shake on the Runner's cam.
-  const ph = s.phrases[s.phrases.length - 1];
-  if (lastPhraseT === null) lastPhraseT = ph ? ph.t : -1;
-  else if (ph && ph.t !== lastPhraseT) {
-    lastPhraseT = ph.t;
-    if (ROLE !== 'bridge') audio.say(ph.text, 'bridge');
-  }
   const k = s.knockFx[s.knockFx.length - 1];
   if (lastKnockT === null) lastKnockT = k ? k.t : -1;
   else if (k && k.t !== lastKnockT) {
@@ -714,7 +715,7 @@ function frame(now) {
   }
 
   // ---- runner: step the local prediction sim with the local input
-  if (ROLE === 'runner') {
+  if (predicting()) {
     input.f = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
     input.s = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
     input.jump = keys.has('Space');
@@ -760,7 +761,7 @@ function frame(now) {
     trackGhost(showRunner, dt);
   }
 
-  const view = { runner: showRunner, pitch: ROLE === 'runner' ? pitch : 0, ghost: clientGhost, shake };
+  const view = { runner: showRunner, pitch: predicting() ? pitch : 0, ghost: clientGhost, shake };
   world.update(s, view, dt);
   audio.update(s, view, dt);
   if (shake > 0) shake = Math.max(0, shake - Math.min(dt, 0.05));
@@ -784,22 +785,16 @@ function trackGhost(r, dt) {
 }
 
 // --------------------------------------------------------------------- DOM/UI
-const lastPhrase = { text: '', at: 0 };
 function updateDom(s) {
   sidebarRtt = net.rtt;
   document.querySelector('#again')?.classList.toggle('hot', !!s.won);
   renderScore(s);
   pollVoiceLevel();
   const stat = document.querySelector('#netstat');
-  if (stat) stat.textContent = `${net.connected ? '●' : '○'} room ${ROOM} · ${ROLE} · ${net.rtt} ms`;
-
-  const ph = s.phrases[s.phrases.length - 1];
-  const phraseRecent = ph && s.t - ph.t < 2.5;
+  if (stat) stat.textContent = `${net.connected ? '●' : '○'} room ${ROOM} · ${INSPECT ? 'inspecting ' : ''}${ROLE} · ${net.rtt} ms`;
 
   if (ROLE === 'runner' && hud.runner) {
-    const { ear, feel, coach, banner, sonar: sonarEl, vigDeath, vigWin } = hud.runner;
-    ear.textContent = phraseRecent ? ph.text : '';
-    ear.classList.toggle('hot', !!phraseRecent);
+    const { feel, coach, banner, sonar: sonarEl, vigDeath, vigWin } = hud.runner;
     const r = s.runner;
     // shape only: nothing here may leak a state the Runner cannot see
     let f = '';
@@ -820,9 +815,7 @@ function updateDom(s) {
   }
 
   if (ROLE === 'operator' && hud.operator) {
-    const { voice, feed, coach } = hud.operator;
-    const say = s.phrases[s.phrases.length - 1];
-    voice.textContent = say && s.t - say.t < 3 ? `(Bridge) ${say.text}` : '';
+    const { feed, coach } = hud.operator;
     feed.textContent = [s.fx.filter((x) => s.t - x.t < 4).map((x) => x.text).join(' · ')].join(' ');
     coach.textContent = coachOperator(s);
     const k = document.querySelector('.knocks');
@@ -854,7 +847,6 @@ function updateDom(s) {
     keyBar.style.width = Math.min(100, (s.key.hold / SIM.TUNING.keyHoldTime) * 100) + '%';
     keyBtn.classList.toggle('ready', s.exit.armed && s.exit.open < 0.9);
     keyBtn.classList.toggle('done', s.exit.open > 0.9);
-    for (const btn of hud.bridge.phraseRow.querySelectorAll('.btn')) btn.classList.toggle('cool', s.phraseCd > 0);
     if (feedEl) feedEl.textContent = s.stamps.length ? s.stamps.slice(-4).map((x) => `${x.icon} @ z${x.z.toFixed(0)}`).join('  ') : 'no stamps yet';
   }
 }
@@ -862,7 +854,11 @@ function updateDom(s) {
 // -------------------------------------------------------------------- startup
 // debug/automation handle (used by test/lan3d.mjs; harmless in play)
 window.__relay3d = {
-  ROLE,
+  get ROLE() {
+    return ROLE;
+  },
+  INSPECT,
+  inspect,
   ROOM,
   get state() {
     return stateOf();
@@ -892,7 +888,6 @@ window.__relay3d = {
   THREE,
   LAYER,
   ev: (ev) => net.sendEvent(ev),
-  say: (t) => net.say(t),
   view: () => showRunner,
   DEBUG,
   voice,

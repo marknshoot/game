@@ -21,7 +21,7 @@ that is ~2 seconds of runway. **Comms is read-ahead, not reaction.**
 | [`docs/design-pitch.md`](docs/design-pitch.md) | Full design: role triangle, comms topology, obstacle grammar, risks, and a worked level with **measured** beat windows |
 | [`game/`](game/README.md) | **3D LAN build** — three.js, server-authoritative, played by three laptops on one network. `node game/server.js` |
 | [`prototype/`](prototype/README.md) | **2D prototype** — the same idea in one browser window, three panels, zero setup |
-| [`test/`](test/run.sh) | `./test/run.sh` runs everything: 15 + 14 checks against browser windows, 28 integrity + 34 checks over real WebSockets, 23 + 19 voice checks (protocol and real WebRTC), and two headless tuning harnesses that print the level's beat windows |
+| [`test/`](test/run.sh) | `./test/run.sh` runs everything: 15 + 14 checks against browser windows, 33 integrity + 39 checks over real WebSockets, 23 + 19 voice checks (protocol and real WebRTC), and two headless tuning harnesses that print the level's beat windows |
 | `shots/` | Screenshots of the three private screens, 2D and 3D |
 
 ## Play it
@@ -58,8 +58,8 @@ The asymmetry is enforced in the client, not just the fiction:
   synthesizes every sound with WebAudio — no files, no dependencies: filtered-noise footsteps and
   landings, wooden knocks, a positional span motor (rising whine, steady hum, falling whine) and
   lift hum, door clunks, and death/win stingers. The Bridge's `createAudio` is a hard-muted no-op
-  that never constructs an `AudioContext`; the Runner and Operator hear the gantry, and
-  phrase-wheel words and the Runner's shout are spoken with `speechSynthesis`.
+  that never constructs an `AudioContext`; the Runner and Operator hear the gantry. All talking
+  is the built-in, role-routed voice chat (no text chat).
 - **Sonar (`Q`).** The blind Runner emits an expanding ring (0 → 26 m over 1.2 s, 3.5 s cooldown)
   that lights up the architecture — and the hall's fake tiles identically, because they share the
   same material. It reads shape, never state.

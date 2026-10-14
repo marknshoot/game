@@ -17,7 +17,7 @@ Each role can only be held by one machine; the server refuses the fourth player.
 | | sees | hears | can do |
 |---|---|---|---|
 | **RUNNER** (blind) | first-person, fog kills the world past ~15 m, no labels, no door states, no timers, no map; `Q` sonar pulse reads the architecture out to ~26 m | the Bridge's voice + the gantry's mechanisms | run, jump, feel things by proximity |
-| **OPERATOR** (mute) | an elevation schematic of the whole gantry: span/lift/exit states, hazard marks, timings — **and no runner, not even a dot** | the Bridge, the Runner's shouts, and the gantry | 3 levers, stamps, KNOCK |
+| **OPERATOR** (mute) | an elevation schematic of the whole gantry: span/lift/exit states, hazard marks, timings — **and no runner, not even a dot** | the Bridge's and the Runner's voices, and the gantry | 3 levers, stamps, KNOCK |
 | **BRIDGE** (deaf) | the Runner's cam *and* the Operator's board, side by side | **nothing** — `audio.js` is a hard-muted no-op | words, 6 chalk marks, the second key |
 
 The isolation is structural, not a convention: the Runner's camera and the Operator's board render
@@ -54,15 +54,26 @@ call timing; without it he judges by eye.
 
 | Screen | Keys | Mouse |
 |---|---|---|
-| Runner | `W` go (no stopping after) · `A/D` steer · `S` brace · SPACE jump · arrows turn · `Q` sonar · hold `SHIFT` to talk (the Operator hears you) · ⏎ typed shout | click to look (pointer lock) |
+| Runner | `W` go (no stopping after) · `A/D` steer · `S` brace · SPACE jump · arrows turn · `Q` sonar · hold `SHIFT` to talk (the Operator hears you) | click to look (pointer lock) |
 | Operator | `B` span · hold `H` press up · `F` lift · `E` exit lever · `N` knock · `7/8/9` stamp | click the board to drop a stamp |
-| Bridge | hold `SPACE` to talk (Runner + Operator hear you) · `1..8` GO/WAIT/JUMP NOW/LEFT/RIGHT/BRACE/UP/ARM · `T` THROW · `O` ON ONE · `K` hold the 2nd key · `C` cycle chalk · `V` chalk ahead | click his cam to paint chalk |
+| Bridge | hold `SPACE` to talk (Runner + Operator hear you) · `K` hold the 2nd key · `C` cycle chalk · `V` chalk ahead | click his cam to paint chalk |
+| Inspector | `1` Runner · `2` Operator · `3` Bridge — watch that screen; no controls, no voice, no vote | |
 | Everyone | `R` or **RUN AGAIN** votes for a fresh run; two votes restart the room (one, if you are alone) | |
 
 The demo autopilot (`P`) only exists for testing: start the server with `node server.js --debug`
 and open the game with `?debug=1`. A normal server refuses it, and the raw reset event, from every client.
 
+## Inspector seat
+
+A full room takes one more person: the **inspector** (lobby → *INSPECT this room*, or the button
+offered when a role is taken). He sees any of the three private screens exactly as that player
+does — the Operator's lies included — and switches with `1 / 2 / 3` without reloading. The server
+gives him snapshots and nothing else: every event, input, vote and voice link from him is refused,
+and role rotation leaves him where he is. One per room.
+
 ## Voice
+
+Talking is voice only — there is no text chat and no phrase buttons.
 
 Built in, peer-to-peer over the LAN, and routed by role — the disabilities are enforced, not asked for:
 
@@ -77,8 +88,7 @@ signaling **only** along those three links ([`shared/voice-rules.js`](shared/voi
 refuses any offer/answer that would send the other way, add video or open a data channel, so a
 modified client can neither talk to the deaf Bridge nor give the mute Operator a voice. Talking
 lights go only to the roles who can hear. No STUN/TURN: nothing leaves the network. Measured on
-a LAN: ~35 ms jitter buffer plus a 20 ms Opus frame, versus ~0.35 s for the TTS phrase wheel,
-which stays as the fallback for players without a mic.
+a LAN: ~35 ms jitter buffer plus a 20 ms Opus frame. Without a mic a player cannot talk.
 
 **Browsers only allow the microphone on https** (or `localhost`). The server therefore also
 listens on `port + 1000` (9791) with a self-signed certificate it generates on first run for this
@@ -111,18 +121,15 @@ game/
   hidden or throttled no longer freezes anyone else — the lesson from the 2D prototype.
 - **Roles are exclusive per room**; a role with no player simply does nothing that level needs.
 - **The server enforces who may do what.** Levers, knocks and stamps are accepted from the Operator only;
-  phrases, chalk and the second key from the Bridge only; the Runner sends only movement and his shout.
+  chalk and the second key from the Bridge only; the Runner sends only movement; the inspector nothing.
   A modified client cannot let one player do everyone's job. Event payloads are clamped, frames above
   16 KB close the socket, a Runner whose input stops arriving (frozen tab) stops running, and a Bridge
   who disconnects lets go of the key.
-- **The Runner's voice** (typed here, spoken on the Operator's machine via `speechSynthesis`)
-  reaches the Operator only: the Operator is mute, the Bridge is deaf. The server enforces the routing.
 - **Sound is a private channel too.** `audio.js` is procedural WebAudio (no files): filtered-noise
   footsteps and landings, wooden knocks, a positional span motor (rising whine / steady hum /
   falling whine) and lift hum, door clunks, and death/win stingers. The Runner hears the gantry and
-  the Bridge; the Operator hears the gantry, the Bridge, and the Runner's shouts; the Bridge's
-  `createAudio` is a hard-muted no-op that never constructs an `AudioContext`. Phrase-wheel words
-  and the Runner's shout are spoken with `speechSynthesis`.
+  the Bridge; the Operator hears the gantry and both voices; the Bridge's
+  `createAudio` is a hard-muted no-op that never constructs an `AudioContext`.
 
 ## Honest limits
 
@@ -136,16 +143,16 @@ because it is vendored; upgrading is a one-file swap.
 
 ```bash
 node ../test/tune3d.mjs     # headless: beat windows, re-rolls, Monte Carlo of the human chain, 60-seed autopilot
-node ../test/phase0.mjs     # integrity over raw WebSockets (normal server): 28 checks
+node ../test/phase0.mjs     # integrity over raw WebSockets (normal server): 33 checks
 node ../test/voice-proto.mjs  # voice routing at the protocol level + https: 23 checks
 node ../test/voice3d.mjs    # real WebRTC between three Chrome tabs with a fake mic: 19 checks
-node ../test/lan3d.mjs      # three real browser tabs over WebSocket (--debug server): 34 checks
+node ../test/lan3d.mjs      # three real browser tabs over WebSocket (--debug server): 39 checks
 ./../test/run.sh            # everything, 2D and 3D
 ```
 
 `test/lan3d.mjs` checks, among other things: WebGL is actually drawing, the layer isolation holds,
-the Operator's lever crosses the network, the Bridge's word reaches both other screens and is
-rate-limited, the Operator's stamp reaches *only* the Bridge, the Runner's shout reaches the
-Operator but never the deaf Bridge, the Bridge is hard-muted while the knock renders as a runner-cam
+the Operator's lever crosses the network, there is no text chat anywhere, a real mouse click on
+the Operator's board stamps that spot and reaches the Bridge, a click on the Bridge's board chalks,
+the inspector can switch screens but act on nothing, the Bridge is hard-muted while the knock renders as a runner-cam
 shake, chalk spends shared ink across machines, the two-key exit needs both machines, a full
 server-side run completes, and RUN AGAIN rotates every tab into its next role.

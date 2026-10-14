@@ -37,7 +37,6 @@ export const TUNING = {
   doorStay: 2.5, // once open, the seal holds this long and then slams shut
 
   respawnDelay: 1.0,
-  phraseCd: 1.2,
   chalkInk: 6,
   knocks: 3,
   // retained for older callers; the start line is a station now
@@ -117,16 +116,14 @@ export function createState(seed) {
 
     ink: TUNING.chalkInk,
     knocks: TUNING.knocks,
-    phraseCd: 0,
 
     chalk: [],
-    phrases: [],
     stamps: [],
     knockFx: [],
     fx: [],
     players: {},
 
-    stats: { phrases: 0, chalk: 0, knocks: 0, throws: 0, lifts: 0, presses: 0 },
+    stats: { chalk: 0, knocks: 0, throws: 0, lifts: 0, presses: 0 },
   };
   s.layout = rollLayout(s);
   return s;
@@ -251,14 +248,6 @@ export function applyEvent(s, ev) {
       if (!ev.down && s.exit.phase === 'shut') s.key.hold = 0;
       return;
     }
-    case 'phrase': {
-      if (s.phraseCd > 0) return;
-      s.phraseCd = TUNING.phraseCd;
-      s.phrases.push({ text: String(ev.text || '').slice(0, 16), t: now });
-      if (s.phrases.length > 30) s.phrases.shift();
-      s.stats.phrases++;
-      return;
-    }
     case 'chalk': {
       if (s.ink <= 0) return fx(s, 'NO CHALK LEFT', 'warn');
       s.ink--;
@@ -329,7 +318,6 @@ export function step(s, dt, input) {
   }
 
   const r = s.runner;
-  s.phraseCd = Math.max(0, s.phraseCd - dt);
 
   // --- span state machine
   const sp = s.span;
@@ -636,7 +624,7 @@ function autopilot(s) {
 }
 
 // What goes over the wire 30 times a second. The event logs are trimmed to what a client
-// can still show (recent phrases / fx / stamps / knocks); the server-only fields are dropped.
+// can still show (recent fx / stamps / knocks); the server-only fields are dropped.
 export function snapshotOf(s) {
   const recent = (list, n, age) => list.filter((x) => s.t - x.t < age).slice(-n);
   return {
@@ -648,7 +636,6 @@ export function snapshotOf(s) {
     exit: { ...s.exit },
     collapse: { ...s.collapse },
     layout: { spanLane: s.layout.spanLane, hall: [...s.layout.hall] },
-    phrases: s.phrases.slice(-2),
     fx: recent(s.fx, 6, 4),
     stamps: s.stamps.slice(-8),
     knockFx: s.knockFx.slice(-1),
